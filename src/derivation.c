@@ -1,0 +1,102 @@
+/* Counterexample derivation trees
+ 
+ Copyright (C) 2019-2020 Free Software Foundation, Inc.
+ 
+ This file is part of Bison, the GNU Compiler Compiler.
+ 
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 3 of the License, or
+ (at your option) any later version.
+ 
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ 
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
+
+#include <config.h>
+#include "derivation.h"
+#include "system.h"
+
+static const derivation d_dot = { -1, NULL };
+
+derivation *
+derivation_dot (void)
+{
+  return &d_dot;
+}
+
+derivation *
+derivation_new (symbol_number sym, gl_list_t children)
+{
+  derivation *deriv = xmalloc (sizeof (derivation));
+  deriv->sym = sym;
+  deriv->children = children;
+  return deriv;
+}
+
+size_t
+derivation_size (derivation *deriv)
+{
+  if (!deriv->children)
+    return 1;
+  int size = 1;
+  gl_list_iterator_t it = gl_list_iterator (deriv->children);
+  derivation *child;
+  while (gl_list_iterator_next (&it, (const void **) &child, NULL))
+    size += derivation_size (child);
+  return size;
+}
+
+// these are used rarely enough that I don't think they should be interned.
+void
+derivation_print (derivation *deriv, FILE *f)
+{
+  symbol *sym = symbols[deriv->sym];
+  if (deriv == &d_dot)
+    {
+      fputs (" • ", f);
+      return;
+    }
+  if (!deriv->children)
+    {
+      fputc (' ', f);
+      symbol_print (sym, f);
+      fputc (' ', f);
+      return;
+    }
+  gl_list_iterator_t it = gl_list_iterator (deriv->children);
+  derivation *child;
+  fputc (' ', f);
+  symbol_print (sym, f);
+  fputs (" ::= [", f);
+  while (gl_list_iterator_next (&it, (const void **) &child, NULL))
+    derivation_print (child, f);
+  fputs ("] ", f);
+}
+
+void
+derivation_print_leaves (derivation *deriv, FILE *f)
+{
+  if (deriv == &d_dot)
+    {
+      fputs (" • ", f);
+      return;
+    }
+  if (!deriv->children)
+    {
+      symbol *sym = symbols[deriv->sym];
+      fputc (' ', f);
+      symbol_print (sym, f);
+      fputc (' ', f);
+      return;
+    }
+
+  gl_list_iterator_t it = gl_list_iterator (deriv->children);
+  derivation *child;
+  while (gl_list_iterator_next (&it, (const void **) &child, NULL))
+    derivation_print_leaves (child, f);
+}

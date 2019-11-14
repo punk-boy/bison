@@ -55,6 +55,7 @@
 #include "symtab.h"
 #include "tables.h"
 #include "uniqstr.h"
+#include "state-item.h"
 
 
 int
@@ -217,6 +218,7 @@ main (int argc, char *argv[])
   reduce_free ();
   conflicts_free ();
   grammar_free ();
+  state_items_free ();
   output_file_names_free ();
 
   /* The scanner memory cannot be released right after parsing, as it
