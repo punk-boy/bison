@@ -21,7 +21,12 @@
 #ifndef CLOSURE_H_
 # define CLOSURE_H_
 
+#include <bitsetv.h>
 # include "gram.h"
+
+
+extern bitsetv firsts;
+#define FIRSTS(Var)   firsts[(Var) - ntokens]
 
 /* Allocates the itemset and ruleset vectors, and precomputes useful
    data so that closure can be called.  n is the number of elements to

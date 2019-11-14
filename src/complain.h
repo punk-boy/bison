@@ -47,6 +47,7 @@ typedef enum
   {
     warning_conflicts_rr,
     warning_conflicts_sr,
+    warning_counter_example,
     warning_deprecated,
     warning_empty_rule,
     warning_midrule_values,
@@ -104,6 +105,7 @@ typedef enum
 
     Wconflicts_rr     = 1 << warning_conflicts_rr,
     Wconflicts_sr     = 1 << warning_conflicts_sr,
+    Wcounter_example  = 1 << warning_counter_example,
     Wdeprecated       = 1 << warning_deprecated,
     Wempty_rule       = 1 << warning_empty_rule,
     Wmidrule_values   = 1 << warning_midrule_values,

@@ -40,6 +40,10 @@ src_bison_SOURCES =                             \
   src/complain.h                                \
   src/conflicts.c                               \
   src/conflicts.h                               \
+  src/counterexample.c                          \
+  src/counterexample.h                          \
+  src/derivation.c                              \
+  src/derivation.h                              \
   src/derives.c                                 \
   src/derives.h                                 \
   src/files.c                                   \
@@ -91,6 +95,8 @@ src_bison_SOURCES =                             \
   src/scan-skel.h                               \
   src/state.c                                   \
   src/state.h                                   \
+  src/state-item.c                              \
+  src/state-item.h                              \
   src/symlist.c                                 \
   src/symlist.h                                 \
   src/symtab.c                                  \

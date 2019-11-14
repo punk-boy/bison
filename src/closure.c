@@ -42,11 +42,9 @@ static bitset ruleset;
 
 /* internal data.  See comments before set_fderives and set_firsts.  */
 static bitsetv fderives = NULL;
-static bitsetv firsts = NULL;
 
 /* Retrieve the FDERIVES/FIRSTS sets of the nonterminals numbered Var.  */
 #define FDERIVES(Var)   fderives[(Var) - ntokens]
-#define FIRSTS(Var)   firsts[(Var) - ntokens]
 
 
 /*-----------------.
@@ -115,6 +113,8 @@ print_fderives (void)
 | (5)) is set.                                                      |
 `------------------------------------------------------------------*/
 
+bitsetv firsts = NULL;
+
 static void
 set_firsts (void)
 {
@@ -153,8 +153,6 @@ set_fderives (void)
 {
   fderives = bitsetv_create (nvars, nrules, BITSET_FIXED);
 
-  set_firsts ();
-
   for (symbol_number i = ntokens; i < nsyms; ++i)
     for (symbol_number j = ntokens; j < nsyms; ++j)
       if (bitset_test (FIRSTS (i), j - ntokens))
@@ -164,7 +162,6 @@ set_fderives (void)
   if (trace_flag & trace_sets)
     print_fderives ();
 
-  bitsetv_free (firsts);
 }
 
 
@@ -175,7 +172,7 @@ closure_new (int n)
   itemset = xnmalloc (n, sizeof *itemset);
 
   ruleset = bitset_create (nrules, BITSET_FIXED);
-
+  set_firsts ();
   set_fderives ();
 }
 
@@ -232,4 +229,5 @@ closure_free (void)
   free (itemset);
   bitset_free (ruleset);
   bitsetv_free (fderives);
+  bitsetv_free (firsts);
 }
