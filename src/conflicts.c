@@ -34,6 +34,7 @@
 #include "reader.h"
 #include "state.h"
 #include "symtab.h"
+#include "counterexample.h"
 
 /* -1 stands for not specified. */
 int expected_sr_conflicts = -1;
@@ -629,6 +630,63 @@ conflicts_total_count (void)
 `------------------------------*/
 
 static void
+report_counterexamples ()
+{
+  for (state_number sn = 0; sn < nstates; ++sn)
+    {
+      if (conflicts[sn])
+        {
+          state_items_init (stdout);
+          state *s = states[sn];
+          reductions *reds = s->reductions;
+          size_t res = 0;
+          for (symbol_number i = 0; i < ntokens; ++i)
+            {
+              int j,k;
+              for (j = 0; j < reds->num; ++j)
+                if (bitset_test (reds->lookahead_tokens[j], i))
+                  break;
+              for (k = j + 1; k < reds->num; ++k)
+                if (bitset_test (reds->lookahead_tokens[k], i))
+                  break;
+              if (k < reds->num)
+                {
+                  rule *r1 = reds->rules[j];
+                  rule *r2 = reds->rules[k];
+                  state_item_number c1, c2;
+                  for (item_number l = 0; l < s->nitems; ++l)
+                    {
+                      const rule *r = item_rule (&ritem[s->items[l]]);
+                      if (r == r1)
+                        c1 = state_item_index_lookup (sn, l);
+                      else if (r == r2)
+                        {
+                          c2 = state_item_index_lookup (sn, l);
+                          break;
+                        }
+                    }
+                  report_counterexample (c1, c2, i, false);
+                }
+              if (j < reds->num && i > 0)
+                {
+                  rule *r1 = reds->rules[j];
+                  state_item_number c1 = -1, c2 = -1;
+                  for (item_number l = 0; l < s->nitems; ++l)
+                    {
+                      const rule *r = item_rule (&ritem[s->items[l]]);
+                      if (r == r1)
+                        c1 = state_item_index_lookup (sn, l);
+                      else if (ritem[s->items[l]] == i)
+                        c2 = state_item_index_lookup (sn, l);
+                    }
+                  report_counterexample (c1, c2, i, true);
+                }
+            }
+        }
+    }
+}
+
+static void
 rule_conflicts_print (void)
 {
   for (rule_number i = 0; i < nrules; i += 1)
@@ -653,6 +711,7 @@ rule_conflicts_print (void)
                       r->user_number, rr, expected_rr);
         }
     }
+    report_counterexamples ();
 }
 
 /*---------------------------------.
