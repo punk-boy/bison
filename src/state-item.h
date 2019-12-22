@@ -56,6 +56,8 @@
  */
 
 #define SI_DISABLED(sin) (sin == -2)
+#define SI_PRODUCTION(si) (si == 0 || *(si->item - 1) < 0)
+#define SI_TRANSITION(si) (si != 0 && *(si->item - 1) >= 0)
 
 typedef int state_item_number;
 
@@ -74,16 +76,10 @@ extern state_item_number *state_item_map;
 /** Array mapping state_item_numbers to state_items */
 extern state_item *state_items;
 
-/** Transition map: StateItem -> StateItem */
+/** state-item graph edges */
 extern state_item_number *trans;
-
-/** Reverse transition map: StateItem -> Set of state_item_numbers */
 extern bitsetv rev_trans;
-
-/** Production map within the same state: StateItem -> Set of state_item offsets */
 extern Hash_table *prods;
-
-/** Reverse production map: state -> nonterminal -> Set of state_item offsets */
 extern Hash_table *rev_prods;
 
 state_item *state_item_lookup (state_number s, state_item_number off);
@@ -94,17 +90,13 @@ state_item_index_lookup (state_number s, state_item_number off)
   return state_item_map[s] + off;
 }
 
-static inline state_item_number
-state_item_pointer_lookup (state_item *s)
-{
-  return s - state_items;
-}
-
 bitset prods_lookup (state_item_number si);
 bitset rev_prods_lookup (state_item_number si);
 
 void state_items_init (FILE *report);
 void print_state_item (state_item *si, FILE *out);
 void state_items_free (void);
+
+bool production_allowed (state_item *si, state_item *next);
 
 #endif /* STATE_ITEM_H */

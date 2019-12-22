@@ -584,3 +584,26 @@ state_items_free (void)
       bitsetv_free (tfirsts);
     }
 }
+
+/**
+ * Determine, using precedence and associativity, whether the next
+ * production is allowed from the current production.
+ */
+bool
+production_allowed (state_item *si, state_item *next)
+{
+  sym_content *s1 = item_rule (si->item)->lhs;
+  sym_content *s2 = item_rule (next->item)->lhs;
+  int prec1 = s1->prec;
+  int prec2 = s2->prec;
+  if (prec1 >= 0 && prec2 >= 0)
+    {
+      // Do not expand if lower precedence.
+      if (prec1 > prec2)
+        return false;
+      // Do not expand if same precedence, but left-associative.
+      if (prec1 == prec2 && s1->assoc == left_assoc)
+        return false;
+    }
+    return true;
+}

@@ -21,6 +21,7 @@
 #define COUNTEREXAMPLE_H
 
 #include "state-item.h"
-void report_counterexample (state_item_number itm1, state_item_number itm2,
-                            symbol_number nextSym, bool shift_reduce);
+void
+counterexample_report (state_item_number itm1, state_item_number itm2,
+                       symbol_number nextSym, bool shift_reduce);
 #endif /* COUNTEREXAMPLE_H */

@@ -65,6 +65,8 @@ src_bison_SOURCES =                             \
   src/location.h                                \
   src/lr0.c                                     \
   src/lr0.h                                     \
+  src/lssi.c                                    \
+  src/lssi.h                                    \
   src/main.c                                    \
   src/muscle-tab.c                              \
   src/muscle-tab.h                              \
@@ -75,6 +77,8 @@ src_bison_SOURCES =                             \
   src/output.c                                  \
   src/output.h                                  \
   src/parse-gram.y                              \
+  src/parse-simulation.c                        \
+  src/parse-simulation.h                        \
   src/print-graph.c                             \
   src/print-graph.h                             \
   src/print-xml.c                               \

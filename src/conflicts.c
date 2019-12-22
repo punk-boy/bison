@@ -654,32 +654,39 @@ report_counterexamples ()
                   rule *r1 = reds->rules[j];
                   rule *r2 = reds->rules[k];
                   state_item_number c1, c2;
-                  for (item_number l = 0; l < s->nitems; ++l)
+                  for (int l = state_item_map[sn];
+                       l < state_item_map[sn + 1]; ++l)
                     {
-                      const rule *r = item_rule (&ritem[s->items[l]]);
+                      state_item *si = state_items + l;
+                      const rule *r = item_rule (si->item);
                       if (r == r1)
-                        c1 = state_item_index_lookup (sn, l);
+                        c1 = l;
                       else if (r == r2)
                         {
-                          c2 = state_item_index_lookup (sn, l);
+                          c2 = l;
                           break;
                         }
                     }
-                  report_counterexample (c1, c2, i, false);
+                  counterexample_report (c1, c2, i, false);
                 }
               if (j < reds->num && i > 0)
                 {
                   rule *r1 = reds->rules[j];
                   state_item_number c1 = -1, c2 = -1;
-                  for (item_number l = 0; l < s->nitems; ++l)
+                  for (int l = state_item_map[sn];
+                       l < state_item_map[sn + 1]; ++l)
                     {
-                      const rule *r = item_rule (&ritem[s->items[l]]);
-                      if (r == r1)
-                        c1 = state_item_index_lookup (sn, l);
-                      else if (ritem[s->items[l]] == i)
-                        c2 = state_item_index_lookup (sn, l);
+                      if (SI_DISABLED (l))
+                        continue;
+                      state_item *si = state_items + l;
+                      const rule *r = item_rule (si->item);
+                      if (r == r1 && item_number_is_rule_number (*si->item))
+                          c1 = l;
+                      if (*si->item == i)
+                          c2 = l;
                     }
-                  report_counterexample (c1, c2, i, true);
+                  if (c2 >= 0)
+                    counterexample_report (c1, c2, i, true);
                 }
             }
         }
@@ -711,6 +718,7 @@ rule_conflicts_print (void)
                       r->user_number, rr, expected_rr);
         }
     }
+  if (warning_is_enabled (Wcounter_example))
     report_counterexamples ();
 }
 

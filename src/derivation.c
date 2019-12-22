@@ -21,7 +21,7 @@
 #include "derivation.h"
 #include "system.h"
 
-static const derivation d_dot = { -1, NULL };
+static derivation d_dot = { -1, NULL };
 
 derivation *
 derivation_dot (void)
@@ -36,6 +36,17 @@ derivation_new (symbol_number sym, gl_list_t children)
   deriv->sym = sym;
   deriv->children = children;
   return deriv;
+}
+
+void
+derivation_free (derivation *d)
+{
+  if (d && d != &d_dot)
+    {
+      if (d->children)
+        gl_list_free (d->children);
+      free (d);
+    }
 }
 
 size_t
