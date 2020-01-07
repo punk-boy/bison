@@ -37,18 +37,10 @@ bool intersect_symbol (symbol_number sym, bitset syms);
 bool intersect (bitset ts, bitset syms);
 
 /**
- * Compute a set of state-items that can make a transition on the given
- * symbol to this state-item such that the resulting possible lookahead
- * symbols are as given.
- */
-bitset lssi_reverse_transition (state_item_number s, symbol_number sym,
-                                bitset lookahead, bitset guide);
-
-/**
  * Compute a set of sequences of StateItems that can make production steps
  * to this StateItem such that the resulting possible lookahead symbols are
  * as given.
  */
-gl_list_t lssi_reverse_production (state_item_number si, bitset lookahead);
+gl_list_t lssi_reverse_production (state_item *si, bitset lookahead);
 
 #endif /* LSSI_H */

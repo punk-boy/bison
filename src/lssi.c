@@ -100,7 +100,7 @@ append_lssi (lssi *sn, Hash_table *visited, gl_list_t queue)
 }
 
 /**
- * Compute the set of StateItems that can reach the given conflict item via
+ * Compute the set of state-items that can reach the given conflict item via
  * a combination of transitions or production steps.
  */
 bitset
@@ -296,21 +296,17 @@ intersect (bitset ts, bitset syms)
 
 
 /**
- * Compute a set of search nodes that can make a production steps to this
- * search node.
+ * Compute a list of state_items that have a production to n with respect
+ * to its lookahead
  */
 gl_list_t
-reverse_production (lssi *n)
+lssi_reverse_production (state_item *si, bitset lookahead)
 {
   gl_list_t result =
     gl_list_create_empty (GL_LINKED_LIST, NULL, NULL, NULL, true);
-  state_item_number si = n->si;
-  bitset rev_prod = rev_prods_lookup (si);
+  bitset rev_prod = rev_prods_lookup (si - state_items);
   if (!rev_prod)
     return result;
-
-  state_item *initial = state_items + si;
-  bitset lookahead = n->lookahead;
   // A production step was made to the current lalr_item.
   // Check that the next symbol in the parent lalr_item is
   // compatible with the lookahead.
@@ -319,20 +315,19 @@ reverse_production (lssi *n)
   BITSET_FOR_EACH (biter, rev_prod, sin, 0)
   {
     state_item *prevsi = state_items + sin;
-    if (!production_allowed (prevsi, initial))
+    if (!production_allowed (prevsi, si))
       continue;
     bitset prev_lookahead = prevsi->lookahead;
-    bitset next_lookahead;
     if (item_number_is_rule_number (*(prevsi->item)))
-      {                         // reduce item
+      {
+        // reduce item
         // Check that some lookaheads can be preserved.
         if (!intersect (prev_lookahead, lookahead))
           continue;
-        next_lookahead = bitset_create (nstate_items, BITSET_FIXED);
-        bitset_union (next_lookahead, lookahead, prev_lookahead);
       }
     else
-      {                         // shift item
+      {
+        // shift item
         if (lookahead)
           {
             // Check that lookahead is compatible with the first
@@ -342,8 +337,9 @@ reverse_production (lssi *n)
             // the lookahead of the corresponding item.
             bool applicable = false;
             bool nlable = true;
-            for (item_number *pos = prevsi->item; !applicable && nlable
-                 && item_number_is_symbol_number (*pos); ++pos)
+            for (item_number *pos = prevsi->item + 1;
+                 !applicable && nlable && item_number_is_symbol_number (*pos);
+                 ++pos)
               {
                 symbol_number next_sym = item_number_as_symbol_number (*pos);
                 if (ISTOKEN (next_sym))
@@ -359,85 +355,11 @@ reverse_production (lssi *n)
                       nlable = nullable[next_sym - ntokens];
                   }
               }
-            if (!applicable && !nullable)
+            if (!applicable && !nlable)
               continue;
           }
-        next_lookahead = bitset_create (nstate_items, BITSET_FIXED);
-        if (prev_lookahead)
-          bitset_copy (next_lookahead, prev_lookahead);
       }
-    gl_list_add_last (result, new_lssi (sin, n, next_lookahead, true));
+    gl_list_add_last (result, prevsi);
   }
-  return result;
-}
-
-/**
- * Compute a set of StateItems that can make a transition on the given
- * symbol to this StateItem such that the resulting possible lookahead
- * symbols are as given.
- */
-bitset
-lssi_reverse_transition (state_item_number s, symbol_number sym,
-                         bitset lookahead, bitset guide)
-{
-  state_item *si = state_items + s;
-  bitset result = bitset_create (nstate_items, BITSET_FIXED);
-  if (si->state->accessing_symbol != sym)
-    return result;
-
-  lssi *ss = new_lssi (s, NULL, lookahead, false);
-  if (s > 0 && item_number_is_symbol_number (*(si->item - 1)))
-    {
-      bitset prevs = rev_trans[s];
-      // There are StateItems that can make a transition on sym
-      // to the current StateItem.  Now, check if the lookahead
-      // is compatible.
-      bitset_iterator biter;
-      state_item_number sin;
-      BITSET_FOR_EACH (biter, prevs, sin, 0)
-      {
-        state_item *prev = state_items + sin;
-        if (guide && !bitset_test (guide, prev->state->number))
-          continue;
-        if (ss->lookahead && !intersect (prev->lookahead,
-                                         ss->lookahead))
-          continue;
-        bitset_set (result, sin);
-      }
-      return result;
-    }
-  // Consider items in the same state that might use this
-  // production.
-  gl_list_t rev_p = reverse_production (ss);
-  gl_list_iterator_t it = gl_list_iterator (rev_p);
-  lssi *candidate;
-  while (gl_list_iterator_next (&it, (const void **) &candidate, NULL))
-    bitset_set (result, candidate->si);
-  gl_list_free (rev_p);
-  return result;
-}
-
-/**
- * Compute a set of sequences of StateItems that can make production steps
- * to this StateItem such that the resulting possible lookahead symbols are
- * as given.
- */
-gl_list_t
-lssi_reverse_production (state_item_number si, bitset lookahead)
-{
-  gl_list_t result =
-    gl_list_create_empty (GL_LINKED_LIST, NULL, NULL, NULL, true);
-  lssi *init = new_lssi (si, NULL, lookahead, false);
-  gl_list_t rep = reverse_production (init);
-  gl_list_iterator_t it = gl_list_iterator (rep);
-  lssi *prod;
-  while (gl_list_iterator_next (&it, (const void **) &prod, NULL))
-    {
-      gl_list_t si_list =
-        gl_list_create_empty (GL_LINKED_LIST, NULL, NULL, NULL, true);
-      for (lssi *sn = prod; sn->parent != NULL; sn = sn->parent)
-        gl_list_add_first (si_list, state_items + sn->si);
-      gl_list_add_last (result, si_list);
-    }
   return result;
 }
