@@ -40,25 +40,24 @@
  
  There are two type of edges in this graph transitions and productions.
  Transitions are the same as transitions from the parser except edges
- are only between items from the same rule. These are stored as two
- arrays (as most items will have transitions) which are indexed the same
- way as state_items.
- 
- trans maps a state-item to another state-item
- rev_trans maps a state-item to a bitset of the state-items
- it has transitions from.
+ are only between items from the same rule. These are stored as an
+ array "trans" (as most items will have transitions) which are indexed the
+ same way as state_items.
  
  Productions are edges from items with a nonterminal after the dot to
  the production of that nonterminal in the same state. These edges are
- stored as hash maps from a state_item to a set of what productions
+ stored as a hash map "si_prods" from a state_item to a set of what productions
  it goes from/to
+ 
+ The inverses of these edges are stored in an array of bitsets, "revs." A
+ state-item that begins with a dot will have reverse production edges, and all
+ others will have reverse transition edges.
  
  */
 
-#define SI_DISABLED(sin) (sin == -2)
+#define SI_DISABLED(sin) (si_trans[sin] == -2)
 #define SI_PRODUCTION(si) (si == 0 || *(si->item - 1) < 0)
 #define SI_TRANSITION(si) (si != 0 && *(si->item - 1) >= 0)
-
 typedef int state_item_number;
 
 typedef struct
@@ -77,10 +76,8 @@ extern state_item_number *state_item_map;
 extern state_item *state_items;
 
 /** state-item graph edges */
-extern state_item_number *trans;
-extern bitsetv rev_trans;
-extern Hash_table *prods;
-extern Hash_table *rev_prods;
+extern state_item_number *si_trans;
+extern bitsetv si_revs;
 
 state_item *state_item_lookup (state_number s, state_item_number off);
 
@@ -90,8 +87,7 @@ state_item_index_lookup (state_number s, state_item_number off)
   return state_item_map[s] + off;
 }
 
-bitset prods_lookup (state_item_number si);
-bitset rev_prods_lookup (state_item_number si);
+bitset si_prods_lookup (state_item_number si);
 
 void state_items_init (FILE *report);
 void print_state_item (state_item *si, FILE *out);

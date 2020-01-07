@@ -32,11 +32,9 @@ size_t nstate_items;
 state_item_number *state_item_map;
 state_item *state_items;
 
-state_item_number *trans;
-bitsetv rev_trans;
-Hash_table *prods;
-Hash_table *rev_prods;
-
+state_item_number *si_trans;
+bitsetv si_revs;
+Hash_table *si_prods;
 
 // hash functions for index -> bitset hash maps
 typedef struct
@@ -109,7 +107,7 @@ state_item_set (state_item_number sidx, state *s, item_number off)
   si->state = s;
   si->item = &ritem[off];
   si->lookahead = NULL;
-  trans[sidx] = -1;
+  si_trans[sidx] = -1;
 }
 
 /**
@@ -135,8 +133,8 @@ init_state_items ()
     }
   state_item_map = xnmalloc (nstates + 1, sizeof (state_item_number));
   state_items = xnmalloc (nstate_items, sizeof (state_item));
-  trans = xnmalloc (nstate_items, sizeof (state_item_number));
-  rev_trans = bitsetv_create (nstate_items, nstate_items, BITSET_SPARSE);
+  si_trans = xnmalloc (nstate_items, sizeof (state_item_number));
+  si_revs = bitsetv_create (nstate_items, nstate_items, BITSET_SPARSE);
   state_item_number sidx = 0;
   for (int i = 0; i < nstates; ++i)
     {
@@ -198,9 +196,6 @@ state_sym_lookup (symbol_number sym, Hash_table *h)
   return hash_lookup (h, s);
 }
 
-/**
- * Initialize trans and revTrans maps.
- */
 static void
 init_trans ()
 {
@@ -232,8 +227,8 @@ init_trans ()
                   state_item_number dstSI =
                     state_item_index_lookup (dst->number, k);
 
-                  trans[j] = dstSI;
-                  bitset_set (rev_trans[dstSI], j);
+                  si_trans[j] = dstSI;
+                  bitset_set (si_revs[dstSI], j);
                   break;
                 }
             }
@@ -242,33 +237,19 @@ init_trans ()
 }
 
 bitset
-prods_lookup (state_item_number si)
+si_prods_lookup (state_item_number si)
 {
-  return hash_pair_lookup (prods, si);
+  return hash_pair_lookup (si_prods, si);
 }
 
-bitset
-rev_prods_lookup (state_item_number si)
-{
-  return hash_pair_lookup (rev_prods, si);
-}
-
-/**
- * Initialize prods and revProds maps.
- */
 static void
 init_prods ()
 {
-  prods = hash_initialize (nstate_items,
-                           NULL,
-                           (Hash_hasher) hash_pair_hasher,
-                           (Hash_comparator) hash_pair_comparator,
-                           (Hash_data_freer) hash_pair_free);
-  rev_prods = hash_initialize (nstate_items,
-                               NULL,
-                               (Hash_hasher) hash_pair_hasher,
-                               (Hash_comparator) hash_pair_comparator,
-                               (Hash_data_freer) hash_pair_free);
+  si_prods = hash_initialize (nstate_items,
+                              NULL,
+                              (Hash_hasher) hash_pair_hasher,
+                              (Hash_comparator) hash_pair_comparator,
+                              (Hash_data_freer) hash_pair_free);
   for (int i = 0; i < nstates; ++i)
     {
       state *state = states[i];
@@ -313,22 +294,14 @@ init_prods ()
               prod_hp->key = j;
               prod_hp->l = lb;
               //update prods
-              if (!hash_insert (prods, prod_hp))
+              if (!hash_insert (si_prods, prod_hp))
                 xalloc_die ();
 
-              //update rev_prods
+              //update revs
               bitset_iterator biter;
               state_item_number prod;
               BITSET_FOR_EACH (biter, lb, prod, 0)
-                {
-                  bitset rev_itms = rev_prods_lookup (prod);
-                  if (!rev_itms)
-                    {
-                      rev_itms = bitset_create (nstate_items, BITSET_SPARSE);
-                      hash_pair_insert (rev_prods, prod, rev_itms);
-                    }
-                  bitset_set (rev_itms, j);
-                }
+                bitset_set (si_revs[prod], j);
             }
         }
 
@@ -361,11 +334,14 @@ gen_lookaheads ()
           state_item *prev = gl_list_get_at (queue, 0);
           gl_list_remove_at (queue, 0);
           prev->lookahead = lookahead;
-          bitset rsi = rev_trans[prev - state_items];
-          bitset_iterator biter;
-          state_item_number sin;
-          BITSET_FOR_EACH (biter, rsi, sin, 0)
-            gl_list_add_first (queue, &state_items[sin]);
+          if (SI_TRANSITION (prev))
+            {
+              bitset rsi = si_revs[prev - state_items];
+              bitset_iterator biter;
+              state_item_number sin;
+              BITSET_FOR_EACH (biter, rsi, sin, 0)
+                gl_list_add_first (queue, &state_items[sin]);
+            }
         }
     }
 }
@@ -395,10 +371,9 @@ init_tfirsts (void)
 static inline void
 disable_state_item (state_item_number sin)
 {
-  trans[sin] = -2;
+  si_trans[sin] = -2;
   hash_pair *l = xmalloc (sizeof (hash_pair));
-  hash_pair_remove (prods, sin);
-  hash_pair_remove (rev_prods, sin);
+  hash_pair_remove (si_prods, sin);
 }
 
 /*
@@ -411,8 +386,12 @@ prune_disabled_paths (void)
   for (int i = nstate_items - 1; i >= 0; --i)
     {
       state_item *si = state_items + i;
-      if (trans[i] == -1 && item_number_is_symbol_number (*si->item))
+      if (si_trans[i] == -1 && item_number_is_symbol_number (*si->item))
         {
+          // disable the transitions out of i
+          for (state_item_number j = si_trans[i]; j != -1; j = si_trans[j])
+            disable_state_item (j);
+
           gl_list_t queue =
             gl_list_create (GL_LINKED_LIST, NULL, NULL, NULL, true, 1,
                             (const void **) &si);
@@ -427,11 +406,20 @@ prune_disabled_paths (void)
               state_item_number prev_num = prev - state_items;
               disable_state_item (prev_num);
 
-              bitset rsi = rev_trans[prev_num];
+              bitset rsi = si_revs[prev_num];
               bitset_iterator biter;
               state_item_number sin;
               BITSET_FOR_EACH (biter, rsi, sin, 0)
-                gl_list_add_first (queue, &state_items[sin]);
+              {
+                if (SI_TRANSITION (prev))
+                  gl_list_add_first (queue, &state_items[sin]);
+                else
+                  {
+                    bitset p = si_prods_lookup (sin);
+                    if (p)
+                      bitset_reset (p, prev_num);
+                  }
+              }
             }
         }
     }
@@ -476,27 +464,21 @@ state_items_report (FILE *out)
 
   size_t count = 0;
   for (state_item_number si = 0; si < nstate_items; ++si)
-    if (trans[si] != -1)
+    if (si_trans[si] != -1)
       ++count;
 
   fprintf (out, "# transitions: %zu\n", count);
 
   count = 0;
-  for (hash_pair *hp = (hash_pair *) hash_get_first (prods);
-       hp != NULL; hp = hash_get_next (prods, hp))
+  for (hash_pair *hp = (hash_pair *) hash_get_first (si_prods);
+       hp != NULL; hp = hash_get_next (si_prods, hp))
     count += bitset_count (hp->l);
   fprintf (out, "# productions: %zu\n", count);
 
   count = 0;
   for (state_item_number si = 0; si < nstate_items; ++si)
-    count += bitset_count (rev_trans[si]);
-  fprintf (out, "# reverse transitions: %zu\n", count);
-
-  count = 0;
-  for (hash_pair *hp = (hash_pair *) hash_get_first (rev_prods);
-       hp != NULL; hp = hash_get_next (rev_prods, hp))
-    count += bitset_count (hp->l);
-  fprintf (out, "# reverse productions: %zu\n", count);
+    count += bitset_count (si_revs[si]);
+  fprintf (out, "# reverse edges: %zu\n", count);
 
   // Graph printing
   if (trace_flag & trace_cex)
@@ -508,16 +490,15 @@ state_items_report (FILE *out)
             {
               item_print (state_items[j].item, NULL, out);
               putc ('\n', out);
-              if (trans[j] >= 0)
+              if (si_trans[j] >= 0)
                 {
                   fputs ("    -> ", out);
-                  print_state_item (state_items + trans[j], out);
+                  print_state_item (state_items + si_trans[j], out);
                 }
 
-              bitset sets[3] =
-                { rev_trans[j], prods_lookup (j), rev_prods_lookup (j) };
-              const char *txt[3] = { "    <- ", "    => ", "    <= " };
-              for (int seti = 0; seti < 3; ++seti)
+              bitset sets[2] = { si_prods_lookup (j), si_revs[j] };
+              const char *txt[2] = { "    => ", "    <- " };
+              for (int seti = 0; seti < 2; ++seti)
                 {
                   bitset b = sets[seti];
                   if (b)
@@ -576,10 +557,9 @@ state_items_free (void)
 {
   if (s_initialized)
     {
-      hash_free (rev_prods);
-      hash_free (prods);
-      bitsetv_free (rev_trans);
-      free (trans);
+      hash_free (si_prods);
+      bitsetv_free (si_revs);
+      free (si_trans);
       free (state_items);
       bitsetv_free (tfirsts);
     }

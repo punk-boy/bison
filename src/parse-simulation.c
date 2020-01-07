@@ -73,7 +73,7 @@ copy_parse_state (bool prepend, parse_state *parent)
   ret->parent = parent;
   ret->prepend = prepend;
   ret->reference_count = 0;
-  ret->visited = false;
+  ret->free_contents_early = false;
   ++parent->reference_count;
   ++allocs;
   return ret;
@@ -115,7 +115,7 @@ new_parse_state (gl_list_t sis, gl_list_t derivs, bool prepend,
   ret->parent = parent;
   ret->prepend = prepend;
   ret->reference_count = 0;
-  ret->visited = false;
+  ret->free_contents_early = false;
   ++parent->reference_count;
   ++allocs;
   return ret;
@@ -129,8 +129,8 @@ free_parse_state (parse_state *ps)
   --ps->reference_count;
   // need to keep the parse state around
   // for visited, but its contents can be freed
-  if ((ps->reference_count == 1 && ps->visited) ||
-      (ps->reference_count == 0 && !ps->visited))
+  if ((ps->reference_count == 1 && ps->free_contents_early) ||
+      (ps->reference_count == 0 && !ps->free_contents_early))
     {
       if (ps->state_items.contents)
         gl_list_free (ps->state_items.contents);
@@ -138,7 +138,7 @@ free_parse_state (parse_state *ps)
         gl_list_free (ps->derivs.contents);
       free_parse_state (ps->parent);
     }
-  if (ps->reference_count == 0)
+  if (ps->reference_count <= 0)
     {
       free (ps);
       ++frees;
@@ -247,8 +247,8 @@ nullable_closure (parse_state *ps, state_item *si, gl_list_t states)
 {
   parse_state *current_ps = ps;
   state_item_number prev_sin = si - state_items;
-  for (state_item_number sin = trans[prev_sin];
-       sin != -1; prev_sin = sin, sin = trans[sin])
+  for (state_item_number sin = si_trans[prev_sin];
+       sin != -1; prev_sin = sin, sin = si_trans[sin])
     {
       state_item *psi = state_items + prev_sin;
       symbol_number sp = item_number_as_symbol_number (*psi->item);
@@ -272,7 +272,7 @@ simulate_transition (parse_state *ps)
   // symbols into account.
   gl_list_t result =
     gl_list_create_empty (GL_LINKED_LIST, NULL, NULL, NULL, true);
-  state_item_number si_next = trans[si - state_items];
+  state_item_number si_next = si_trans[si - state_items];
   // check for disabled transition, shouldn't happen
   // as any state_items that lead to these should be
   // disabled.
@@ -313,7 +313,7 @@ simulate_production (parse_state *ps, symbol_number compat_sym)
   gl_list_t result =
     gl_list_create_empty (GL_LINKED_LIST, NULL, NULL, NULL, true);
   state_item *si = ps->state_items.tail_elt;
-  bitset prod = prods_lookup (si - state_items);
+  bitset prod = si_prods_lookup (si - state_items);
   if (prod)
     {
       bitset_iterator biter;
@@ -341,14 +341,15 @@ simulate_production (parse_state *ps, symbol_number compat_sym)
 // item associated with ps's conflict. symbol_set is a lookahead set this
 // reduction must be compatible with
 gl_list_t
-simulate_reduction (parse_state *ps, item_number *conflict_item,
-                    int rule_len, bitset symbol_set)
+simulate_reduction (parse_state *ps, int rule_len, bitset symbol_set)
 {
   gl_list_t result =
     gl_list_create_empty (GL_LINKED_LIST, NULL, NULL, NULL, true);
 
   int s_size = ps->state_items.total_size;
   int d_size = ps->derivs.total_size;
+  if (ps->depth >= 0)
+    d_size--;                   // account for dot
   parse_state *new_root = empty_parse_state ();
   gl_list_t popped_derivs = parser_pop (ps, d_size - rule_len,
                                         s_size - rule_len - 1,
@@ -359,14 +360,6 @@ simulate_reduction (parse_state *ps, item_number *conflict_item,
   const rule *r = item_rule (si->item);
   symbol_number lhs = r->lhs->number;
   derivation *deriv = derivation_new (lhs, popped_derivs);
-  if (ps->depth == 0)
-    {
-      int dot_pos = 0;
-      for (item_number *i = conflict_item - 1;
-           item_number_is_symbol_number (*i) && i > ritem; --i)
-        ++dot_pos;
-      gl_list_add_at (deriv->children, dot_pos, derivation_dot ());
-    }
   --new_root->depth;
   ps_chunk_append (&new_root->derivs, deriv);
 
@@ -374,33 +367,58 @@ simulate_reduction (parse_state *ps, item_number *conflict_item,
     {
       state_item *tail = (state_item *) new_root->state_items.tail_elt;
       ps_chunk_append (&new_root->state_items,
-                       state_items + trans[tail - state_items]);
+                       state_items + si_trans[tail - state_items]);
       gl_list_add_last (result, new_root);
     }
   else
     {
       // The head state_item is a production item, so we need to prepend
-      // with possible source state_item.
+      // with possible source state-items.
       const state_item *head = ps->state_items.head_elt;
-      gl_list_t prev =
-        lssi_reverse_production (head - state_items, symbol_set);
+      gl_list_t prev = lssi_reverse_production (head, symbol_set);
       gl_list_iterator_t it = gl_list_iterator (prev);
-      gl_list_t psis;
+      state_item *psis;
       while (gl_list_iterator_next (&it, (const void **) &psis, NULL))
         {
-          //Prepend the results from the reverse production
-          parse_state *p_state = new_parse_state (psis, NULL, true, new_root);
+          //Prepend the result from the reverse production
+          parse_state *copy = copy_parse_state (true, new_root);
+          ps_chunk_prepend (&copy->state_items, psis);
 
           // Append the left hand side to the end of the parser state
-          parse_state *copy = copy_parse_state (false, p_state);
+          copy = copy_parse_state (false, copy);
           ps_chunk *sis = &copy->state_items;
           const state_item *tail = sis->tail_elt;
-          ps_chunk_append (sis, state_items + trans[tail - state_items]);
+          ps_chunk_append (sis, state_items + si_trans[tail - state_items]);
           gl_list_add_last (result, copy);
           nullable_closure (copy, (state_item *) sis->tail_elt, result);
         }
       gl_list_free (prev);
     }
+  return result;
+}
+
+gl_list_t
+parser_prepend (parse_state *ps)
+{
+  gl_list_t result = gl_list_create_empty (GL_LINKED_LIST, NULL, NULL,
+                                           (gl_listelement_dispose_fn)
+                                           free_parse_state,
+                                           true);
+  state_item *head = ps->state_items.head_elt;
+  bitset prev = si_revs[head - state_items];
+  symbol_number prepend_sym =
+    item_number_as_symbol_number (*(head->item - 1));
+  bitset_iterator biter;
+  state_item_number sin;
+  BITSET_FOR_EACH (biter, prev, sin, 0)
+  {
+    parse_state *copy = copy_parse_state (true, ps);
+    copy->reference_count++;
+    ps_chunk_prepend (&copy->state_items, state_items + sin);
+    if (SI_TRANSITION (head))
+      ps_chunk_prepend (&copy->derivs, derivation_new (prepend_sym, NULL));
+    gl_list_add_last (result, copy);
+  }
   return result;
 }
 

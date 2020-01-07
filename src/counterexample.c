@@ -41,12 +41,11 @@
  *  lookahead-sensitive path when constructing a unifying counterexample. */
 #define EXTENDED_SEARCH false
 
-/* various costs for making various steps in a search */
+/* costs for making various steps in a search */
 #define PRODUCTION_COST 50
 #define REDUCE_COST 1
 #define SHIFT_COST 1
 #define UNSHIFT_COST 1
-#define DUPLICATE_PRODUCTION_COST 0
 #define EXTENDED_COST 10000
 
 /** The time limit before printing an assurance message to the user to
@@ -83,18 +82,18 @@ print_counterexample (counterexample *cex)
   if (cex->unifying)
     printf ("Example ");
   else
-    printf ("First Example");
+    printf ("First  Example");
   derivation_print_leaves (cex->d1, stdout);
-  printf ("\nFirst derivation ");
+  printf ("\nFirst  derivation ");
   derivation_print (cex->d1, stdout);
   if (!cex->unifying)
     {
-      printf ("\nSecond example ");
+      printf ("\nSecond Example ");
       derivation_print_leaves (cex->d2, stdout);
+      printf ("\nSecond derivation ");
+      derivation_print (cex->d2, stdout);
+      fputs ("\n\n", stdout);
     }
-  printf ("\nSecond derivation ");
-  derivation_print (cex->d2, stdout);
-  fputs ("\n\n", stdout);
 }
 
 /*
@@ -109,6 +108,7 @@ typedef struct si_bfs_node
 {
   state_item_number si;
   struct si_bfs_node *parent;
+  int production_depth;
   int reference_count;
 } si_bfs_node;
 
@@ -118,10 +118,25 @@ si_bfs_new (state_item_number si, si_bfs_node *parent)
   si_bfs_node *ret = xcalloc (1, sizeof (si_bfs_node));
   ret->si = si;
   ret->parent = parent;
-  ret->reference_count = 0;
+  ret->reference_count = 1;
+  ret->production_depth = 0;
   if (parent)
-    ++parent->reference_count;
+    {
+      ++parent->reference_count;
+      ret->production_depth = parent->production_depth;
+    }
+  if (SI_PRODUCTION ((state_items + si)))
+    ++ret->production_depth;
   return ret;
+}
+
+static bool
+si_bfs_contains (si_bfs_node *n, state_item_number sin)
+{
+  for (si_bfs_node *search = n; search != NULL; search = search->parent)
+    if (search->si == sin)
+      return false;
+  return true;
 }
 
 void
@@ -141,33 +156,37 @@ si_bfs_free (si_bfs_node *n)
 }
 
 /**
- * Repeatedly take production steps on the given StateItem so that the
- * first symbol of the derivation matches the conflict symbol.
+ * start is a state_item such that there's a conflict sym is an element of FIRSTS of the
+ *
+ * FIRSTS(*start->item). This returns a derivation tree of
  */
-static inline gl_list_t
-expand_first (state_item *start, symbol_number next_sym)
+static inline void
+expand_to_conflict (state_item_number start, symbol_number conflict_sym,
+                    gl_list_t derivation_out)
 {
-  si_bfs_node *init = si_bfs_new (start - state_items, NULL);
+  si_bfs_node *init = si_bfs_new (start, NULL);
 
   gl_list_t queue = gl_list_create (GL_LINKED_LIST, NULL, NULL,
                                     (gl_listelement_dispose_fn) si_bfs_free,
                                     true, 1, (const void **) &init);
   si_bfs_node *node;
-  // breadth-first search
+  // breadth-first search for a path of productions to the conflict symbol
   while (gl_list_size (queue) > 0)
     {
       node = (si_bfs_node *) gl_list_get_at (queue, 0);
       state_item *silast = state_items + node->si;
       symbol_number sym = item_number_as_symbol_number (*(silast->item));
-      if (sym == next_sym)
+      if (sym == conflict_sym)
         break;
       if (ISVAR (sym))
         {
+          // add each production to the search
           bitset_iterator biter;
           state_item_number sin;
-          bitset sib = prods_lookup (node->si);
+          bitset sib = si_prods_lookup (node->si);
           BITSET_FOR_EACH (biter, sib, sin, 0)
             {
+              // ignore productions already in the path
               const si_bfs_node *sn;
               for (sn = node; sn != NULL; sn = sn->parent)
                 if (sn->si == sin)
@@ -177,11 +196,10 @@ expand_first (state_item *start, symbol_number next_sym)
               si_bfs_node *next = si_bfs_new (sin, node);
               gl_list_add_last (queue, next);
             }
+          // for nullable nonterminals, add its goto to the search
           if (nullable[sym - ntokens])
             {
-              // If the nonterminal after dot is nullable,
-              // we need to look further.
-              si_bfs_node *next = si_bfs_new (trans[node->si], node);
+              si_bfs_node *next = si_bfs_new (si_trans[node->si], node);
               gl_list_add_last (queue, next);
             }
         }
@@ -194,18 +212,19 @@ expand_first (state_item *start, symbol_number next_sym)
         puts ("Error expanding derivation");
       return NULL;
     }
-  // done - construct derivation
 
   derivation *dinit = derivation_new (next_sym, NULL);
   gl_list_t result =
     gl_list_create (GL_LINKED_LIST, NULL, NULL,
                     (gl_listelement_dispose_fn) derivation_free,
                     true, 1, (const void **) &dinit);
+  // iterate backwards through the generated path to create a derivation
+  // of the conflict symbol containing derivations of each production step.
   for (si_bfs_node *n = node; n != NULL; n = n->parent)
     {
       state_item *si = state_items + n->si;
       item_number *pos = si->item;
-      if (pos == ritem || item_number_is_rule_number (*(pos - 1)))
+      if (SI_PRODUCTION (si))
         {
           item_number *i;
           for (i = pos + 1; !item_number_is_rule_number (*i); ++i)
@@ -213,38 +232,43 @@ expand_first (state_item *start, symbol_number next_sym)
           symbol_number lhs =
             rules[item_number_as_rule_number (*i)].lhs->number;
           derivation *deriv = derivation_new (lhs, result);
-          result =
-            gl_list_create (GL_LINKED_LIST, NULL, NULL,
-                            (gl_listelement_dispose_fn) derivation_free,
-                            true, 1, (const void **) &deriv);
+          result = n->production_depth == 1
+            ? derivation_out
+            : gl_list_create (GL_LINKED_LIST, NULL, NULL,
+                              (gl_listelement_dispose_fn) derivation_free,
+                              true, 1, (const void **) &deriv);
         }
       else
         {
-          derivation *deriv =
-            derivation_new (item_number_as_symbol_number (*(pos - 1)), NULL);
+          symbol_number sym = item_number_as_symbol_number (*(pos - 1));
+          derivation *deriv = derivation_new (sym, NULL);
           gl_list_add_first (result, deriv);
         }
     }
   gl_list_free (queue);
   gl_list_remove_at (result, 0);
-  return result;
 }
 
 /**
- * Auxiliary method to complete any pending productions in the given
- * sequence of parser states.
+ * Complete derivations for any pending productions in the given
+ * sequence of state-items (states
+ *
  */
 derivation *
-complete_diverging_example (symbol_number next_sym,
+complete_diverging_example (symbol_number conflict_sym,
                             gl_list_t states, gl_list_t derivs)
 {
   // The idea is to transfer each pending symbol on the productions
   // associated with the given StateItems to the resulting derivation.
   gl_list_t result =
     gl_list_create_empty (GL_LINKED_LIST, NULL, NULL, NULL, true);
-  if (!derivs)
-    derivs = gl_list_create_empty (GL_LINKED_LIST, NULL, NULL, NULL, true);
   bool lookahead_required = false;
+  if (!derivs)
+    {
+      derivs = gl_list_create_empty (GL_LINKED_LIST, NULL, NULL, NULL, true);
+      gl_list_add_last (result, derivation_dot ());
+      lookahead_required = true;
+    }
   // This is the fastest way to get the tail node from the gl_list API
   gl_list_node_t tmpd = gl_list_add_last (derivs, NULL);
   gl_list_node_t tmps = gl_list_add_last (states, NULL);
@@ -252,83 +276,80 @@ complete_diverging_example (symbol_number next_sym,
   gl_list_node_t state = gl_list_previous_node (states, tmps);
   gl_list_remove_node (derivs, tmpd);
   gl_list_remove_node (states, tmps);
+  // complete derivations backwards as its easier to keep track of
+  // productions in this direction
   for (; state != NULL; state = gl_list_previous_node (states, state))
     {
       state_item *si = (state_item *) gl_list_node_value (states, state);
       item_number *item = si->item;
       item_number pos = *item;
       // symbols after dot
-      if (gl_list_size (result) == 0)
+      if (gl_list_size (result) == 0 && !item_number_is_rule_number (pos))
         {
-          if (gl_list_size (derivs) == 0)
-            {
-              gl_list_add_last (result, derivation_dot ());
-              lookahead_required = true;
-            }
-          if (!item_number_is_rule_number (pos))
-            {
-              gl_list_add_last (result,
-                                derivation_new (item_number_as_symbol_number
-                                                (pos), NULL));
-              lookahead_required = false;
-            }
+          gl_list_add_last (result,
+                            derivation_new (item_number_as_symbol_number
+                                            (pos), NULL));
+          lookahead_required = false;
         }
       item_number *i;
+      // go through each symbol after the dot in the current rule, and
+      // add each symbol to its derivation.
       for (i = item; !item_number_is_rule_number (*i); ++i)
         {
+          // if the item is a reduction, we could skip to the wrong rule
+          // by starting at i + 1, so this continue is necessary
           if (i == item)
             continue;
           symbol_number sym = item_number_as_symbol_number (*i);
-          if (lookahead_required)
+          if (!lookahead_required || sym == conflict_sym)
             {
-              if (sym != next_sym)
-                {
-                  // Need to expand sym to match nextSym
-                  if (!nullable[sym - ntokens]
-                      || bitset_test (FIRSTS (sym), next_sym))
-                    {
-                      state_item *trans_si =
-                        &state_items[trans[si - state_items]];
-                      gl_list_t next_derivs =
-                        expand_first (trans_si, next_sym);
-                      if (!next_derivs)
-                        // easiest way to not break everything on an error.
-                        return derivation_dot ();
-                      gl_list_iterator_t it = gl_list_iterator (next_derivs);
-                      derivation *tmp;
-                      while (gl_list_iterator_next
-                             (&it, (const void **) &tmp, NULL))
-                        gl_list_add_last (result, tmp);
-                      i += gl_list_size (next_derivs) - 1;
-                      gl_list_free (next_derivs);
-                      lookahead_required = false;
-
-                    }
-                  else
-                    {
-                      // This nonterminal is nullable and cannot derive next_sym.
-                      // So, this nonterminal must derive the empty string,
-                      // and next_sym must be derived by a later nonterminal.
-                      derivation *d = derivation_new (sym,
-                                                      gl_list_create_empty
-                                                      (GL_LINKED_LIST,
-                                                       NULL, NULL,
-                                                       NULL, 1));
-                      gl_list_add_last (result, d);
-                    }
-                }
-              else
-                {
-                  gl_list_add_last (result, derivation_new (sym, NULL));
-                  lookahead_required = false;
-                }
+              gl_list_add_last (result, derivation_new (sym, NULL));
+              lookahead_required = false;
+              continue;
+            }
+          // Since states is a path to the conflict state-item,
+          // for a reduce conflict item, we will want to have a derivation
+          // that shows the conflict symbol from its lookahead set being used.
+          //
+          // Since reductions have the dot at the end of the item,
+          // this loop will be first executed on the last item in the path
+          // that's not a reduction. When that happens,
+          // the symbol after the dot should be a non-terminal,
+          // and we can look through successive nullable non-terminals
+          // for one with the conflict symbol in its first set.
+          if (bitset_test (FIRSTS (sym), conflict_sym))
+            {
+              state_item_number trans_si = si_trans[si - state_items];
+              gl_list_t next_derivs;
+              expand_to_conflict (trans_si, conflict_sym, next_derivs);
+              gl_list_iterator_t it = gl_list_iterator (next_derivs);
+              derivation *tmp;
+              while (gl_list_iterator_next (&it, (const void **) &tmp, NULL))
+                gl_list_add_last (result, tmp);
+              i += gl_list_size (next_derivs) - 1;
+              gl_list_free (next_derivs);
+              lookahead_required = false;
+            }
+          else if (nullable[sym - ntokens])
+            {
+              derivation *d = derivation_new (sym,
+                                              gl_list_create_empty
+                                              (GL_LINKED_LIST, NULL,
+                                               NULL, NULL, 1));
+              gl_list_add_last (result, d);
             }
           else
-            gl_list_add_last (result, derivation_new (sym, NULL));
-
+            {
+              // We found a path to the conflict item, and despite it
+              // having the conflict symbol in its lookahead, no example
+              // containing the symbol after the conflict item
+              // can be found.
+              gl_list_add_last (result, derivation_new (1, NULL));
+              lookahead_required = false;
+            }
         }
       rule_number r = item_number_as_rule_number (*i);
-      // symbols before dot
+      // add derivations for symbols before dot
       for (i = item - 1; !item_number_is_rule_number (*i) && i >= ritem; i--)
         {
           gl_list_node_t p = gl_list_previous_node (states, state);
@@ -392,62 +413,40 @@ nonunifying_shift_path (gl_list_t reduce_path, state_item *shift_conflict)
         gl_list_create (GL_LINKED_LIST, NULL, NULL,
                         (gl_listelement_dispose_fn) si_bfs_free,
                         true, 1, (const void **) &init);
+      si_bfs_node *sis;
+      state_item *prevsi = NULL;
       while (gl_list_size (queue) > 0)
         {
-          si_bfs_node *sis = (si_bfs_node *) gl_list_get_at (queue, 0);
-          state_item *sisrc = state_items + sis->si;
-          item_number *srcpos = sisrc->item;
-          // Reverse Transition
-          symbol_number sym = *(srcpos - 1);
-          // Only look for state compatible with the shortest path.
-          bitset rsi = rev_trans[sis->si];
+          sis = (si_bfs_node *) gl_list_get_at (queue, 0);
+          // if we end up in the start state, the shift couldn't be found.
+          if (sis->si == 0)
+            break;
+          bitset rsi = si_revs[sis->si];
           bitset_iterator biter;
           state_item_number sin;
-          state_item *prevsi = NULL;
           BITSET_FOR_EACH (biter, rsi, sin, 0)
             {
-              state_item *psi = state_items + sin;
-              if (psi->state == refsi->state)
+              prevsi = state_items + sin;
+              if (SI_TRANSITION (prevsi))
                 {
-                  prevsi = psi;
-                  // BITSET_FOR_EACH is two nested for loops
-                  goto biter_exit;
+                  if (prevsi->state == refsi->state)
+                    goto search_end;
                 }
-              si = prevsi;
-              if (prevsi)
-                si_list_prepend (result, si);
-              break;
-            }
-        biter_exit:
-          if (prevsi || sisrc == state_items)
-            {
-              for (si_bfs_node *n = sis; n->parent != NULL; n = n->parent)
-                gl_list_add_first (result, state_items + n->si);
-              si = prevsi;
-              if (prevsi)
-                gl_list_add_first (result, si);
-              break;
-            }
-          // Reverse Production
-          bitset rps = rev_prods_lookup (sisrc - state_items);
-          if (rps)
-            {
-              bitset_iterator biter2;
-              BITSET_FOR_EACH (biter2, rps, sin, 0)
+              else if (!si_bfs_contains (sis, sin))
                 {
-                  si_bfs_node *n;
-                  for (n = sis; n != NULL; n = n->parent)
-                    if (n->si == sin)
-                      break;
-                  if (!n)
-                    {
-                      si_bfs_node *prevsis = si_bfs_new (sin, sis);
-                      gl_list_add_last (queue, prevsis);
-                    }
+                  si_bfs_node *prevsis = si_bfs_new (sin, sis);
+                  gl_list_add_last (queue, prevsis);
                 }
             }
           gl_list_remove_at (queue, 0);
         }
+    search_end:
+      // prepend path to shift we found
+      for (si_bfs_node *n = sis; n->parent != NULL; n = n->parent)
+        gl_list_add_first (result, state_items + n->si);
+      si = prevsi;
+      if (si)
+        gl_list_add_first (result, si);
       gl_list_free (queue);
     }
   if (trace_flag & trace_cex)
@@ -467,7 +466,8 @@ nonunifying_shift_path (gl_list_t reduce_path, state_item *shift_conflict)
  * lookahead-sensitive path.
  */
 counterexample *
-example_from_path (bool shift_reduce, state_item_number itm2,
+example_from_path (bool shift_reduce,
+                   state_item_number itm2,
                    gl_list_t shortest_path, symbol_number next_sym)
 {
   derivation *deriv1 =
@@ -661,8 +661,11 @@ ssb_append (search_state *ss)
     }
   if (!hash_insert (visited, ss))
     xalloc_die ();
-  ss->states[0]->visited = true;
-  ss->states[1]->visited = true;
+  // if states are only referenced by the visited set,
+  // their contents should be freed as we only need
+  // the metadata necessary to compute a hash.
+  ss->states[0]->free_contents_early = true;
+  ss->states[1]->free_contents_early = true;
   ++ss->states[0]->reference_count;
   ++ss->states[1]->reference_count;
   search_state_bundle *ssb = xmalloc (sizeof (search_state_bundle));
@@ -725,10 +728,6 @@ production_step (search_state *ss, int parser_state)
     }
 }
 
-/**
- * Compute the number of production steps made
- *  in the parser state
- */
 static int
 reduction_cost (parse_state *ps)
 {
@@ -777,8 +776,7 @@ reduction_step (search_state *ss, item_number *conflict_item,
     }
 
   search_state *new_root = copy_search_state (ss);
-  gl_list_t reduced = simulate_reduction (ps, conflict_item,
-                                          rule_len, symbol_set);
+  gl_list_t reduced = simulate_reduction (ps, rule_len, symbol_set);
   gl_list_iterator_t it = gl_list_iterator (reduced);
   parse_state *reduced_ps;
   while (gl_list_iterator_next (&it, (const void **) &reduced_ps, NULL))
@@ -794,94 +792,89 @@ reduction_step (search_state *ss, item_number *conflict_item,
 
 /**
  * Attempt to prepend the given symbol to this search state, respecting
- * the given subsequent next symbol on each path.
+ * the given subsequent next symbol on each path. If a reverse transition
+ * cannot be made on both states, possible reverse productions are prepended
  */
 void
 search_state_prepend (search_state *ss, symbol_number sym, bitset guide)
 {
   state_item *si1src = (state_item *) ss->states[0]->state_items.head_elt;
   state_item *si2src = (state_item *) ss->states[1]->state_items.head_elt;
-  bitset si1_lookahead = si1src->lookahead;
-  bitset si2_lookahead = si2src->lookahead;
-  bitset prev1 = NULL, prev2 = NULL;
-  bitset prev1ext =
-    lssi_reverse_transition (si1src - state_items, sym, si1_lookahead, guide);
-  bitset prev2ext =
-    lssi_reverse_transition (si2src - state_items, sym, si2_lookahead, guide);
-  if (EXTENDED_SEARCH)
-    {
-      prev1 = prev1ext;
-      prev2 = prev2ext;
-      prev1ext =
-        lssi_reverse_transition (si1src - state_items, sym, si1_lookahead,
-                                 NULL);
-      prev2ext =
-        lssi_reverse_transition (si2src - state_items, sym, si2_lookahead,
-                                 NULL);
-    }
-  bitset_set (prev1ext, si1src - state_items);
-  bitset_set (prev2ext, si2src - state_items);
-  bitset_iterator biter;
-  state_item_number sin;
-  BITSET_FOR_EACH (biter, prev1ext, sin, 0)
-    {
-      bool guided1 = !EXTENDED_SEARCH || bitset_test (prev1, sin);
-      state_item *psi1 = state_items + sin;
-      bitset_iterator biter2;
-      state_item_number sin2;
-      BITSET_FOR_EACH (biter2, prev2ext, sin2, 0)
-        {
-          bool guided2 = !EXTENDED_SEARCH || bitset_test (prev2, sin);
-          state_item *psi2 = state_items + sin2;
-          // Only continue if the StateItems on both paths are the same.
-          if (psi1 == si1src && psi2 == si2src)
-            continue;
-          if (psi1->state != psi2->state)
-            continue;
-          search_state *copy = copy_search_state (ss);
-          parse_state *ps1 = ss_init_parse_state (copy, 0, true);
-          parse_state *ps2 = ss_init_parse_state (copy, 1, true);
 
-          if (psi1 != si1src)
-            ps_chunk_prepend (&ps1->state_items, psi1);
-          if (psi2 != si2src)
-            ps_chunk_prepend (&ps2->state_items, psi2);
-          int production_steps = 0;
-          if (psi1 != si1src && psi1->item + 1 == si1src->item)
-            {
-              if (psi2 != si2src && psi2->item + 1 == si2src->item)
-                {
-                  // Both are reverse transitions; add appropriate
-                  // derivation of the corresponding symbol used for
-                  // the reverse transition.
-                  derivation *deriv = derivation_new (sym, NULL);
-                  ps_chunk_prepend (&ps1->derivs, deriv);
-                  ps_chunk_prepend (&ps2->derivs, deriv);
-                }
-              else
-                {
-                  search_state_free (copy);
-                  continue;
-                }
-            }
-          else if (psi2 != si2src && psi2->item + 1 == si2src->item)
-            {
-              search_state_free (copy);
-              continue;
-            }
-          else
-            production_steps = 2;
-          // At this point, either reverse transition is made on both paths,
-          // or reverse production is made on both paths.
-          // Now, compute the complexity of the new search state.
-          int prepend_size = (psi1 ? 1 : 0) + (psi2 ? 1 : 0);
-          copy->complexity += PRODUCTION_COST *production_steps +
-            UNSHIFT_COST * (prepend_size - production_steps);
-          if (!guided1 || !guided2)
+  bool prod1 = SI_PRODUCTION (si1src);
+  // If one can make a reverse transition and the other can't, only apply
+  // the reverse productions that the other state can make in an attempt to
+  // make progress.
+  if (prod1 != SI_PRODUCTION (si2src))
+    {
+      int prod_state = prod1 ? 0 : 1;
+      gl_list_t prev = parser_prepend (ss->states[prod_state]);
+      gl_list_iterator_t iter = gl_list_iterator (prev);
+      parse_state *ps;
+      while (gl_list_iterator_next (&iter, &ps, NULL))
+        {
+          state_item *psi = ps->state_items.head_elt;
+          bool guided = bitset_test (guide, psi->state->number);
+          if (!guided && !EXTENDED_SEARCH)
+            continue;
+
+          search_state *copy = copy_search_state (ss);
+          ss_set_parse_state (copy, prod_state, ps);
+          copy->complexity += PRODUCTION_COST;
+          if (!guided)
             copy->complexity += EXTENDED_COST;
           ssb_append (copy);
         }
+      gl_list_free (prev);
+      return;
     }
+  // The parse state heads are either both production items or both
+  // transition items. So all prepend options will either be
+  // reverse transitions or reverse productions
+  int complexity_cost = prod1 ? PRODUCTION_COST : UNSHIFT_COST;
+  complexity_cost *= 2;
+
+  gl_list_t prev1 = parser_prepend (ss->states[0]);
+  gl_list_t prev2 = parser_prepend (ss->states[1]);
+
+  // loop through each pair of possible prepend states and append search
+  // states for each pair where the parser states correspond to the same
+  // parsed input.
+  gl_list_iterator_t iter1 = gl_list_iterator (prev1);
+  parse_state *ps1;
+  while (gl_list_iterator_next (&iter1, &ps1, NULL))
+    {
+      state_item *psi1 = ps1->state_items.head_elt;
+      bool guided1 = bitset_test (guide, psi1->state->number);
+      if (!guided1 && !EXTENDED_SEARCH)
+        continue;
+
+      gl_list_iterator_t iter2 = gl_list_iterator (prev2);
+      parse_state *ps2;
+      while (gl_list_iterator_next (&iter2, &ps2, NULL))
+        {
+          state_item *psi2 = ps2->state_items.head_elt;
+
+          bool guided2 = bitset_test (guide, psi2->state->number);
+          if (!guided2 && !EXTENDED_SEARCH)
+            continue;
+          // Only consider prepend state items that share the same state.
+          if (psi1->state != psi2->state)
+            continue;
+
+          int complexity = ss->complexity;
+          if (prod1)
+            complexity += PRODUCTION_COST * 2;
+          else
+            complexity += UNSHIFT_COST * 2;
+          // penalty for not being along the guide path
+          if (!guided1 || !guided2)
+            complexity += EXTENDED_COST;
+          ssb_append (new_search_state (ps1, ps2, complexity));
+        }
+    }
+  gl_list_free (prev1);
+  gl_list_free (prev2);
 }
 
 /**
@@ -1031,15 +1024,17 @@ generate_next_states (search_state *ss, state_item *conflict1,
  * type based off of time constraints.
  */
 counterexample *
-unifying_example (state_item_number itm1, state_item_number itm2,
-                  bool shift_reduce, gl_list_t reduce_path,
-                  symbol_number next_sym)
+unifying_example (state_item_number itm1,
+                  state_item_number itm2, bool shift_reduce,
+                  gl_list_t reduce_path, symbol_number next_sym)
 {
   search_state *initial = empty_search_state ();
   state_item *conflict1 = state_items + itm1;
   state_item *conflict2 = state_items + itm2;
   ps_chunk_append (&initial->states[0]->state_items, conflict1);
+  ps_chunk_append (&initial->states[0]->derivs, derivation_dot ());
   ps_chunk_append (&initial->states[1]->state_items, conflict2);
+  ps_chunk_append (&initial->states[1]->derivs, derivation_dot ());
   ssb_queue = gl_list_create_empty (GL_RBTREEHASH_LIST,
                                     (gl_listelement_equals_fn) ssb_equals,
                                     (gl_listelement_hashcode_fn) ssb_hasher,
@@ -1123,7 +1118,7 @@ cex_search_end:;
         cex = complete_diverging_examples (stage3result, next_sym);
       // Otherwise, construct a nonunifying counterexample that
       // begins from the start state using the shortest
-      // lookahead-sensitive path.
+      // lookahead-sensitive path to the reduce item.
       else
         cex = example_from_path (shift_reduce, itm2, reduce_path, next_sym);
     }
@@ -1192,9 +1187,12 @@ counterexample_report (state_item_number itm1, state_item_number itm2,
         bitset_set (rpp_set, si->state->number);
     }
   time_t t = time (NULL);
-  counterexample *cex = difftime (t, cumulative_time) < CUMULATIVE_TIME_LIMIT
-    ? unifying_example (itm1, itm2, shift_reduce, shortest_path, next_sym)
-    : example_from_path (shift_reduce, itm2, shortest_path, next_sym);
+  counterexample *cex = difftime (t,
+                                  cumulative_time) <
+    CUMULATIVE_TIME_LIMIT ? unifying_example (itm1, itm2, shift_reduce,
+                                              shortest_path,
+                                              next_sym) :
+    example_from_path (shift_reduce, itm2, shortest_path, next_sym);
 
   gl_list_free (shortest_path);
   print_counterexample (cex);

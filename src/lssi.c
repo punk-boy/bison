@@ -117,21 +117,12 @@ eligible_state_items (state_item *target)
       if (bitset_test (result, si - state_items))
         continue;
       bitset_set (result, si - state_items);
-      // Consider reverse transitions and reverse productions.
-      bitset rsi = rev_trans[si - state_items];
+      // search all reverse edges.
+      bitset rsi = si_revs[si - state_items];
       bitset_iterator biter;
       state_item_number sin;
       BITSET_FOR_EACH (biter, rsi, sin, 0)
         gl_list_add_last (queue, &state_items[sin]);
-      if (si->item == ritem || *(si->item - 1) < 0)
-        {
-          bitset rp = rev_prods_lookup (si - state_items);
-          bitset_iterator biter;
-          state_item_number sin;
-          if (rp)
-            BITSET_FOR_EACH (biter, rp, sin, 0)
-              gl_list_add_last (queue, &state_items[sin]);
-        }
     }
   gl_list_free (queue);
   return result;
@@ -174,9 +165,9 @@ shortest_path_from_start (state_item_number target, symbol_number next_sym)
           break;
         }
       // Transition
-      if (trans[last] >= 0)
+      if (si_trans[last] >= 0)
         {
-          state_item_number nextSI = trans[last];
+          state_item_number nextSI = si_trans[last];
           if (!OPTIMIZE_SHORTEST_PATH || bitset_test (eligible, nextSI))
             {
               lssi *next = new_lssi (nextSI, n, n->lookahead, false);
@@ -184,7 +175,7 @@ shortest_path_from_start (state_item_number target, symbol_number next_sym)
             }
         }
       // Production step
-      bitset p = prods_lookup (last);
+      bitset p = si_prods_lookup (last);
       if (p)
         {
           state_item si = state_items[last];
@@ -304,15 +295,14 @@ lssi_reverse_production (state_item *si, bitset lookahead)
 {
   gl_list_t result =
     gl_list_create_empty (GL_LINKED_LIST, NULL, NULL, NULL, true);
-  bitset rev_prod = rev_prods_lookup (si - state_items);
-  if (!rev_prod)
+  if (SI_TRANSITION (si))
     return result;
   // A production step was made to the current lalr_item.
   // Check that the next symbol in the parent lalr_item is
   // compatible with the lookahead.
   bitset_iterator biter;
   state_item_number sin;
-  BITSET_FOR_EACH (biter, rev_prod, sin, 0)
+  BITSET_FOR_EACH (biter, si_revs[si - state_items], sin, 0)
   {
     state_item *prevsi = state_items + sin;
     if (!production_allowed (prevsi, si))
