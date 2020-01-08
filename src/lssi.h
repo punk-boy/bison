@@ -21,6 +21,10 @@
 #define LSSI_H
 
 #include "state-item.h"
+/*
+ * find shortest lookahead-sensitive path of state-items to target such that
+ * next_sym is in the follow_L set of target in that position.
+*/
 gl_list_t shortest_path_from_start (state_item_number target,
                                     symbol_number next_sym);
 

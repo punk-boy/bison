@@ -26,7 +26,6 @@
 
 /*
   Simulating states of the parser:
-
   Each state is an array of state-items and an array of derivations.
   Each consecutive state-item represents a transition/goto or production,
   and the derivations are the dereivation trees associated with the symbols
@@ -34,9 +33,34 @@
  
   Parse states are stored as a tree. Each new parse state contains two "chunks,"
   one corresponding to its state-items and the other corresponding to its derivations.
-  Chunks only have new elements which weren't present in its parent. Each chunk also stores
-  the head, tail, and total_size of the list it represents. So if a parse state was to be
-  copied and have
+  Chunks only have new elements which weren't present in its parent.
+  Each chunk also stores the head, tail, and total_size of the list it represents.
+  So if a parse state was to be copied it retains the list metadata but its
+  contents are empty.
+ 
+  A transition gets the state-item which the last state-item of the parse state
+  transitions to. This is appended to the state-item list, and a derivation with
+  just the symbol being transitioned on is appended to the derivation list.
+  A production appends the new state-item, but does not have a derivation
+  associated with it.
+ 
+  A reduction looks at the rule of the last state-item in the state, and pops
+  the last few state-items that make up the rhs of the rule along with their
+  derivations. The derivations become the derivation of the lhs which is then
+  shifted over.
+ 
+  Effectively, everytime a derivation is appended, it represents a shift in
+  the parser. So a parse state that contains
+   start: A . B C D
+   start: A B C D .
+  and the state-items in between will represent a parser that has BCD on the
+  parse stack.
+ 
+  However, the above example cannot be reduced, as it's missing A.
+  Since we start at a state-item that can have a dot in the middle of a rule,
+  it's necessary to support a prepend operation. Luckily the prepend operations
+  are very similar to transitions and productions with the difference being that
+  they operate on the head of the state-item list instead of the tail.
  
   A production
   A transition gets the state-item which the last state-item of the parse state
@@ -84,6 +108,7 @@ bool parse_state_comparator (parse_state *ps1, parse_state *ps2);
 
 void free_parse_state (parse_state *ps);
 
+// returns the linked lists that the parse state is supposed to represent
 void parse_state_lists (parse_state *ps, gl_list_t *state_items,
                         gl_list_t *derivs);
 

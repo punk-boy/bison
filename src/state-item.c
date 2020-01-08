@@ -92,7 +92,7 @@ hash_pair_remove (Hash_table *tab, int key)
 }
 
 /* return a state_item from a state's id and the offset of the item
-   within the state.
+  within the state.
  */
 state_item *
 state_item_lookup (state_number s, state_item_number off)
@@ -201,6 +201,8 @@ init_trans ()
 {
   for (state_number i = 0; i < nstates; ++i)
     {
+      // generate a hash set that maps from accepting symbols to the states
+      // this state transitions to
       state *s = states[i];
       transitions *t = s->transitions;
       Hash_table *transitions
@@ -218,12 +220,12 @@ init_trans ()
           state *dst = state_sym_lookup (*item, transitions);
           if (!dst)
             continue;
+          // find the item in the destination state that corresponds
+          // to the transition of item
           for (int k = 0; k < dst->nitems; ++k)
             {
               if (item + 1 == ritem + dst->items[k])
                 {
-                  // We have found the target item after transition on sym
-                  // from the source item.
                   state_item_number dstSI =
                     state_item_index_lookup (dst->number, k);
 
@@ -309,8 +311,8 @@ init_prods ()
 }
 
 /* Since lookaheads are only generated for reductions,
-   we need to propogate lookahead sets backwards as
-   the searches require each state_item to have a lookahead.
+  we need to propogate lookahead sets backwards as
+  the searches require each state_item to have a lookahead.
  */
 static inline void
 gen_lookaheads ()

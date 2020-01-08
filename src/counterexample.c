@@ -156,9 +156,13 @@ si_bfs_free (si_bfs_node *n)
 }
 
 /**
- * start is a state_item such that there's a conflict sym is an element of FIRSTS of the
+ * start is a state_item such that conflict_sym is an element of FIRSTS of the
+ * non-terminal after the dot in start. Because of this, we should be able to
+ * find an production item starting with conflict_sy by only searching productions
+ * of the non-terminal and shifting over nullable non-terminals
  *
- * FIRSTS(*start->item). This returns a derivation tree of
+ * this adds the derivation of the productions that lead to conflict_sym to
+ * derivation_out and returns the amount of derivations added.
  */
 static inline int
 expand_to_conflict (state_item_number start, symbol_number conflict_sym,
@@ -212,14 +216,17 @@ expand_to_conflict (state_item_number start, symbol_number conflict_sym,
         puts ("Error expanding derivation");
       return -1;
     }
-  derivation *dinit = derivation_new (next_sym, NULL);
-  gl_list_t result =
-    gl_list_create (GL_LINKED_LIST, NULL, NULL,
-                    (gl_listelement_dispose_fn) derivation_free,
-                    true, 1, (const void **) &dinit);
+
+  derivation *dinit = derivation_new (conflict_sym, NULL);
+  gl_list_t result = node->production_depth == 0
+    ? derivation_out
+    : gl_list_create (GL_LINKED_LIST, NULL, NULL,
+                      (gl_listelement_dispose_fn) derivation_free,
+                      true, 1, (const void **) &dinit);
   int ret = 1;
   // iterate backwards through the generated path to create a derivation
   // of the conflict symbol containing derivations of each production step.
+
   for (si_bfs_node *n = node; n != NULL; n = n->parent)
     {
       state_item *si = state_items + n->si;
@@ -254,8 +261,7 @@ expand_to_conflict (state_item_number start, symbol_number conflict_sym,
 
 /**
  * Complete derivations for any pending productions in the given
- * sequence of state-items (states
- *
+ * sequence of state-items.
  */
 derivation *
 complete_diverging_example (symbol_number conflict_sym,
@@ -279,8 +285,11 @@ complete_diverging_example (symbol_number conflict_sym,
   gl_list_node_t state = gl_list_previous_node (states, tmps);
   gl_list_remove_node (derivs, tmpd);
   gl_list_remove_node (states, tmps);
-  // complete derivations backwards as its easier to keep track of
-  // productions in this direction
+  // we go backwards through the path to create the derivation tree bottom-up.
+  // Effectively this loops through each production once, and generates a
+  // derivation of the left hand side by appending all of the rhs symbols.
+  // this becomes the derivation of the non-terminal after the dot in the
+  // next production, and all of the other symbols of the rule are added as normal.    
   for (; state != NULL; state = gl_list_previous_node (states, state))
     {
       state_item *si = (state_item *) gl_list_node_value (states, state);
@@ -374,8 +383,8 @@ complete_diverging_example (symbol_number conflict_sym,
 }
 
 /* iterates backwards through the shifts of the path in the
-   reduce conflict, and finds a path of shifts in the shift
-   conflict that goes through the same states.
+  reduce conflict, and finds a path of shifts in the shift
+  conflict that goes through the same states.
  */
 gl_list_t
 nonunifying_shift_path (gl_list_t reduce_path, state_item *shift_conflict)
@@ -555,10 +564,10 @@ search_state_print (search_state *ss)
   putc ('\n', stdout);
 }
 
-/* When a search state is copied, this is used to
+/*
+ * When a search state is copied, this is used to
  * directly set one of the parse states
  */
-
 static inline void
 ss_set_parse_state (search_state *ss, int index, parse_state *ps)
 {
@@ -567,7 +576,28 @@ ss_set_parse_state (search_state *ss, int index, parse_state *ps)
   ++ps->reference_count;
 }
 
-/* Search states are stored in bundles with those that
+/*
+ * Construct a nonunifying example from a search state
+ * which has its parse states unified at the beginning
+ * but not the end of the example.
+ */
+counterexample *
+complete_diverging_examples(search_state *ss,
+                            symbol_number next_sym)
+{
+  derivation *new_derivs[2];
+  for (int i = 0; i < 2; ++i)
+      {
+        gl_list_t state_items, derivs;
+        parse_state_lists (ss->states[i], &state_items, &derivs);
+        new_derivs[i] =
+          complete_diverging_example (next_sym, state_items, derivs);
+      }
+    return new_counterexample (new_derivs[0], new_derivs[1], false, true);
+}
+
+/*
+ * Search states are stored in bundles with those that
  * share the same complexity. This is so the priority
  * queue takes less overhead.
  */
@@ -615,12 +645,12 @@ visited_comparator (search_state *ss1, search_state *ss2)
     && parse_state_comparator (ss1->states[1], ss2->states[1]);
 }
 
-/** Priority queue for search states with minimal complexity. */
+/* Priority queue for search states with minimal complexity. */
 static gl_list_t ssb_queue;
 static Hash_table *visited;
-/** The set of parser states on the shortest lookahead-sensitive path. */
+/* The set of parser states on the shortest lookahead-sensitive path. */
 static bitset scp_set;
-/** The set of parser states used for the conflict reduction rule. */
+/* The set of parser states used for the conflict reduction rule. */
 static bitset rpp_set;
 
 static void
@@ -659,24 +689,9 @@ ssb_append (search_state *ss)
 }
 
 /*
- * Construct a nonunifying example from a search state
- * which has its parse states unified at the beginning
- * but not the end of the example.
+ * The following functions perform various actions on parse states
+ * and assign complexities to the newly generated search states.
  */
-counterexample *
-complete_diverging_examples (search_state *ss, symbol_number next_sym)
-{
-  derivation *new_derivs[2];
-  for (int i = 0; i < 2; ++i)
-    {
-      gl_list_t state_items, derivs;
-      parse_state_lists (ss->states[i], &state_items, &derivs);
-      new_derivs[i] =
-        complete_diverging_example (next_sym, state_items, derivs);
-    }
-  return new_counterexample (new_derivs[0], new_derivs[1], false, true);
-}
-
 static void
 production_step (search_state *ss, int parser_state)
 {
@@ -1023,7 +1038,7 @@ unifying_example (state_item_number itm1,
         {
           if (trace_flag & trace_cex)
             search_state_print (ss);
-          // Stage 2
+          // Stage 1/2 completing the rules containing the conflicts
           parse_state *ps1 = ss->states[0];
           parse_state *ps2 = ss->states[1];
           if (ps1->depth < 0 && ps2->depth < 0)

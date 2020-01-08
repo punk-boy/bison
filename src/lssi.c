@@ -27,7 +27,7 @@
 #include "getargs.h"
 
 /** If set to true, when computing the shortest lookahead-sensitive path,
- *  only consider states that can reach the conflict state. */
+ * only consider states that can reach the conflict state. */
 #define OPTIMIZE_SHORTEST_PATH true
 
 // lookahead sensative state item
@@ -36,6 +36,7 @@ typedef struct lssi
 {
   state_item_number si;
   struct lssi *parent;
+  // this is the precise lookahead set (follow_L from the CupEx paper)
   bitset lookahead;
   bool free_lookahead;
 } lssi;
@@ -164,7 +165,7 @@ shortest_path_from_start (state_item_number target, symbol_number next_sym)
           finished = true;
           break;
         }
-      // Transition
+      // Transitions don't change follow_L
       if (si_trans[last] >= 0)
         {
           state_item_number nextSI = si_trans[last];
@@ -174,13 +175,18 @@ shortest_path_from_start (state_item_number target, symbol_number next_sym)
               append_lssi (next, visited, queue);
             }
         }
-      // Production step
+      // For production steps, follow_L is based on the symbol after the
+      // non-terminal being produced.
+      // if no such symbol exists, follow_L is unchanged
+      // if the symbol is a terminal, follow_L only contains that terminal
+      // if the symbol is not nullable, follow_L is its FIRSTS set
+      // if the symbol is nullable, follow_L is its FIRSTS set unioned with
+      // this logic applied to the next symbol in the rule
       bitset p = si_prods_lookup (last);
       if (p)
         {
           state_item si = state_items[last];
-          // Compute possible terminals that can follow this production.
-          // (This is first_L in the CupEx paper.)
+          // Compute follow_L as above
           bitset lookahead = bitset_create (nsyms, BITSET_FIXED);
           item_number *pos = si.item + 1;
           for (; !item_number_is_rule_number (*pos); ++pos)

@@ -41,7 +41,7 @@
  There are two type of edges in this graph transitions and productions.
  Transitions are the same as transitions from the parser except edges
  are only between items from the same rule. These are stored as an
- array "trans" (as most items will have transitions) which are indexed the
+ array "si_trans" (as most items will have transitions) which are indexed the
  same way as state_items.
  
  Productions are edges from items with a nonterminal after the dot to
@@ -49,9 +49,9 @@
  stored as a hash map "si_prods" from a state_item to a set of what productions
  it goes from/to
  
- The inverses of these edges are stored in an array of bitsets, "revs." A
- state-item that begins with a dot will have reverse production edges, and all
- others will have reverse transition edges.
+ The inverses of these edges are stored in an array of bitsets, "si_revs."
+ A state-item that begins with a dot will have reverse production edges,
+ and all others will have reverse transition edges.
  
  */
 
