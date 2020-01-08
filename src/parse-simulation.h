@@ -76,23 +76,16 @@ typedef struct parse_state
   bool free_contents_early;
 } parse_state;
 
-void ps_chunk_prepend (ps_chunk *chunk, void *element);
-void ps_chunk_append (ps_chunk *chunk, void *element);
+parse_state *new_parse_state (state_item *conflict);
 
-parse_state *empty_parse_state (void);
-// generates an empty child parse state for parent
-parse_state *copy_parse_state (bool prepend, parse_state *parent);
-// generates an child parse state for parent
-parse_state *new_parse_state (gl_list_t sis, gl_list_t derivs, bool prepend,
-                              parse_state *parent);
+size_t parse_state_hasher (parse_state *ps, size_t max);
+
+bool parse_state_comparator (parse_state *ps1, parse_state *ps2);
 
 void free_parse_state (parse_state *ps);
 
-// Emulates a reduction on a parse state by popping some amount of
-// derivations and state_items off of the parse_state and returning
-// the result in ret. Returns the derivation of what's popped.
-gl_list_t parser_pop (parse_state *ps, int deriv_index,
-                      int si_index, parse_state *ret);
+void parse_state_lists (parse_state *ps, gl_list_t *state_items,
+                        gl_list_t *derivs);
 
 // various functions that return a list of states based off of
 // whatever operation is simulated. After whatever operation, every possible

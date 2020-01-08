@@ -90,10 +90,10 @@ print_counterexample (counterexample *cex)
     {
       printf ("\nSecond Example ");
       derivation_print_leaves (cex->d2, stdout);
-      printf ("\nSecond derivation ");
-      derivation_print (cex->d2, stdout);
-      fputs ("\n\n", stdout);
     }
+  printf ("\nSecond derivation ");
+  derivation_print (cex->d2, stdout);
+  fputs ("\n\n", stdout);
 }
 
 /*
@@ -160,7 +160,7 @@ si_bfs_free (si_bfs_node *n)
  *
  * FIRSTS(*start->item). This returns a derivation tree of
  */
-static inline void
+static inline int
 expand_to_conflict (state_item_number start, symbol_number conflict_sym,
                     gl_list_t derivation_out)
 {
@@ -210,14 +210,14 @@ expand_to_conflict (state_item_number start, symbol_number conflict_sym,
       gl_list_free (queue);
       if (trace_flag & trace_cex)
         puts ("Error expanding derivation");
-      return NULL;
+      return -1;
     }
-
   derivation *dinit = derivation_new (next_sym, NULL);
   gl_list_t result =
     gl_list_create (GL_LINKED_LIST, NULL, NULL,
                     (gl_listelement_dispose_fn) derivation_free,
                     true, 1, (const void **) &dinit);
+  int ret = 1;
   // iterate backwards through the generated path to create a derivation
   // of the conflict symbol containing derivations of each production step.
   for (si_bfs_node *n = node; n != NULL; n = n->parent)
@@ -226,6 +226,7 @@ expand_to_conflict (state_item_number start, symbol_number conflict_sym,
       item_number *pos = si->item;
       if (SI_PRODUCTION (si))
         {
+          ret = 1;
           item_number *i;
           for (i = pos + 1; !item_number_is_rule_number (*i); ++i)
             gl_list_add_last (result, derivation_new (*i, NULL));
@@ -240,6 +241,7 @@ expand_to_conflict (state_item_number start, symbol_number conflict_sym,
         }
       else
         {
+          ++ret;
           symbol_number sym = item_number_as_symbol_number (*(pos - 1));
           derivation *deriv = derivation_new (sym, NULL);
           gl_list_add_first (result, deriv);
@@ -247,6 +249,7 @@ expand_to_conflict (state_item_number start, symbol_number conflict_sym,
     }
   gl_list_free (queue);
   gl_list_remove_at (result, 0);
+  return --ret;
 }
 
 /**
@@ -320,14 +323,9 @@ complete_diverging_example (symbol_number conflict_sym,
           if (bitset_test (FIRSTS (sym), conflict_sym))
             {
               state_item_number trans_si = si_trans[si - state_items];
-              gl_list_t next_derivs;
-              expand_to_conflict (trans_si, conflict_sym, next_derivs);
-              gl_list_iterator_t it = gl_list_iterator (next_derivs);
-              derivation *tmp;
-              while (gl_list_iterator_next (&it, (const void **) &tmp, NULL))
-                gl_list_add_last (result, tmp);
-              i += gl_list_size (next_derivs) - 1;
-              gl_list_free (next_derivs);
+              gl_list_t next_derivs =
+                gl_list_create_empty (GL_LINKED_LIST, NULL, NULL, NULL, true);
+              i += expand_to_conflict (trans_si, conflict_sym, result) - 1;
               lookahead_required = false;
             }
           else if (nullable[sym - ntokens])
@@ -498,11 +496,11 @@ typedef struct
 } search_state;
 
 static search_state *
-empty_search_state (void)
+initial_search_state (state_item *conflict1, state_item *conflict2)
 {
   search_state *ret = xmalloc (sizeof (search_state));
-  ret->states[0] = empty_parse_state ();
-  ret->states[1] = empty_parse_state ();
+  ret->states[0] = new_parse_state (conflict1);
+  ret->states[1] = new_parse_state (conflict2);
   ++ret->states[0]->reference_count;
   ++ret->states[1]->reference_count;
   ret->complexity = 0;
@@ -557,21 +555,9 @@ search_state_print (search_state *ss)
   putc ('\n', stdout);
 }
 
-/* When a search state is copied, theses should be used
- * for operations which only change one parse state
- * init is used when the parse state is changed manually,
- * and set is used when there's a parse state ready to
- * replace what the copy has.
+/* When a search state is copied, this is used to
+ * directly set one of the parse states
  */
-static inline parse_state *
-ss_init_parse_state (search_state *ss, int index, bool prepend)
-{
-  --ss->states[index]->reference_count;
-  parse_state *ret = copy_parse_state (prepend, ss->states[index]);
-  ss->states[index] = ret;
-  ++ret->reference_count;
-  return ret;
-}
 
 static inline void
 ss_set_parse_state (search_state *ss, int index, parse_state *ps)
@@ -590,7 +576,6 @@ typedef struct
   gl_list_t states;
   int complexity;
 } search_state_bundle;
-
 void
 ssb_free (search_state_bundle *ssb)
 {
@@ -619,28 +604,15 @@ ssb_equals (search_state_bundle *s1, search_state_bundle *s2)
 static size_t
 visited_hasher (search_state *ss, size_t max)
 {
-  ps_chunk *sis1 = &ss->states[0]->state_items;
-  ps_chunk *sis2 = &ss->states[1]->state_items;
-  return ((state_item *) sis1->head_elt - state_items +
-          (state_item *) sis1->tail_elt - state_items +
-          (state_item *) sis2->head_elt - state_items +
-          (state_item *) sis2->tail_elt - state_items +
-          sis1->total_size + sis2->total_size) % max;
+  return (parse_state_hasher (ss->states[0], max)
+          + parse_state_hasher (ss->states[1], max)) % max;
 }
 
 static bool
 visited_comparator (search_state *ss1, search_state *ss2)
 {
-  ps_chunk *sis11 = &ss1->states[0]->state_items;
-  ps_chunk *sis12 = &ss1->states[1]->state_items;
-  ps_chunk *sis21 = &ss2->states[0]->state_items;
-  ps_chunk *sis22 = &ss2->states[1]->state_items;
-  return sis11->head_elt == sis21->head_elt &&
-    sis11->tail_elt == sis21->tail_elt &&
-    sis11->total_size == sis21->total_size &&
-    sis12->head_elt == sis22->head_elt &&
-    sis12->tail_elt == sis22->tail_elt &&
-    sis12->total_size == sis22->total_size;
+  return parse_state_comparator (ss1->states[0], ss2->states[0])
+    && parse_state_comparator (ss1->states[1], ss2->states[1]);
 }
 
 /** Priority queue for search states with minimal complexity. */
@@ -694,19 +666,15 @@ ssb_append (search_state *ss)
 counterexample *
 complete_diverging_examples (search_state *ss, symbol_number next_sym)
 {
-  derivation *derivs[2];
+  derivation *new_derivs[2];
   for (int i = 0; i < 2; ++i)
     {
-      parse_state *ps = empty_parse_state ();
-      size_t si_size = ss->states[i]->state_items.total_size;
-      size_t deriv_size = ss->states[i]->derivs.total_size;
-      parser_pop (ss->states[i], si_size, deriv_size, ps);
-      derivs[i] = complete_diverging_example (next_sym,
-                                              ps->state_items.contents,
-                                              ps->derivs.contents);
-      free_parse_state (ps);
+      gl_list_t state_items, derivs;
+      parse_state_lists (ss->states[i], &state_items, &derivs);
+      new_derivs[i] =
+        complete_diverging_example (next_sym, state_items, derivs);
     }
-  return new_counterexample (derivs[0], derivs[1], false, true);
+  return new_counterexample (new_derivs[0], new_derivs[1], false, true);
 }
 
 static void
@@ -1025,16 +993,13 @@ generate_next_states (search_state *ss, state_item *conflict1,
  */
 counterexample *
 unifying_example (state_item_number itm1,
-                  state_item_number itm2, bool shift_reduce,
+                  state_item_number itm2,
+                  bool shift_reduce,
                   gl_list_t reduce_path, symbol_number next_sym)
 {
-  search_state *initial = empty_search_state ();
   state_item *conflict1 = state_items + itm1;
   state_item *conflict2 = state_items + itm2;
-  ps_chunk_append (&initial->states[0]->state_items, conflict1);
-  ps_chunk_append (&initial->states[0]->derivs, derivation_dot ());
-  ps_chunk_append (&initial->states[1]->state_items, conflict2);
-  ps_chunk_append (&initial->states[1]->derivs, derivation_dot ());
+  search_state *initial = initial_search_state (conflict1, conflict2);
   ssb_queue = gl_list_create_empty (GL_RBTREEHASH_LIST,
                                     (gl_listelement_equals_fn) ssb_equals,
                                     (gl_listelement_hashcode_fn) ssb_hasher,
@@ -1105,8 +1070,8 @@ unifying_example (state_item_number itm1,
             }
           generate_next_states (ss, conflict1, conflict2);
         }
-      gl_sortedlist_remove (ssb_queue, (gl_listelement_compar_fn) ssb_comp,
-                            ssb);
+      gl_sortedlist_remove (ssb_queue,
+                            (gl_listelement_compar_fn) ssb_comp, ssb);
     }
 cex_search_end:;
   if (!cex)

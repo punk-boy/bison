@@ -49,7 +49,7 @@ ps_chunk_append (ps_chunk *chunk, void *element)
 static int allocs = 0;
 static int frees = 0;
 
-parse_state *
+static parse_state *
 empty_parse_state (void)
 {
   parse_state *ret = xcalloc (1, sizeof (parse_state));
@@ -62,6 +62,15 @@ empty_parse_state (void)
 }
 
 parse_state *
+new_parse_state (state_item *si)
+{
+  parse_state *ret = empty_parse_state ();
+  ps_chunk_append (&ret->state_items, si);
+  ps_chunk_append (&ret->derivs, derivation_dot ());
+  return ret;
+}
+
+static parse_state *
 copy_parse_state (bool prepend, parse_state *parent)
 {
   parse_state *ret = xmalloc (sizeof (parse_state));
@@ -70,48 +79,6 @@ copy_parse_state (bool prepend, parse_state *parent)
                                                     NULL, NULL, true);
   ret->derivs.contents = gl_list_create_empty (GL_LINKED_LIST, NULL,
                                                NULL, NULL, true);
-  ret->parent = parent;
-  ret->prepend = prepend;
-  ret->reference_count = 0;
-  ret->free_contents_early = false;
-  ++parent->reference_count;
-  ++allocs;
-  return ret;
-}
-
-parse_state *
-new_parse_state (gl_list_t sis, gl_list_t derivs, bool prepend,
-                 parse_state *parent)
-{
-  parse_state *ret = xmalloc (sizeof (parse_state));
-  memcpy (ret, parent, sizeof (parse_state));
-
-  ret->state_items.contents = sis;
-  if (sis)
-    {
-      size_t size = gl_list_size (sis);
-      ret->state_items.total_size += size;
-      if (size > 0)
-        {
-          if (prepend || ret->state_items.head_elt == NULL)
-            ret->state_items.head_elt = gl_list_get_at (sis, 0);
-          if (!prepend || ret->state_items.tail_elt == NULL)
-            ret->state_items.tail_elt = gl_list_get_at (sis, size - 1);
-        }
-    }
-  ret->derivs.contents = derivs;
-  if (derivs)
-    {
-      size_t size = gl_list_size (derivs);
-      ret->derivs.total_size += size;
-      if (size > 0)
-        {
-          if (prepend || ret->derivs.head_elt == NULL)
-            ret->derivs.head_elt = gl_list_get_at (sis, 0);
-          if (!prepend || ret->derivs.tail_elt == NULL)
-            ret->derivs.tail_elt = gl_list_get_at (sis, size - 1);
-        }
-    }
   ret->parent = parent;
   ret->prepend = prepend;
   ret->reference_count = 0;
@@ -143,7 +110,23 @@ free_parse_state (parse_state *ps)
       free (ps);
       ++frees;
     }
+}
 
+size_t
+parse_state_hasher (parse_state *ps, size_t max)
+{
+  ps_chunk *sis = &ps->state_items;
+  return ((state_item *) sis->head_elt - state_items +
+          (state_item *) sis->tail_elt - state_items + sis->total_size) % max;
+}
+
+bool
+parse_state_comparator (parse_state *ps1, parse_state *ps2)
+{
+  ps_chunk *sis1 = &ps1->state_items;
+  ps_chunk *sis2 = &ps2->state_items;
+  return sis1->head_elt == sis2->head_elt &&
+    sis1->tail_elt == sis2->tail_elt && sis1->total_size == sis2->total_size;
 }
 
 // takes an array of n gl_lists and flattens them into two list
@@ -237,6 +220,21 @@ parser_pop (parse_state *ps, int deriv_index,
   return popped_derivs;
 }
 
+void
+parse_state_lists (parse_state *ps, gl_list_t *state_items,
+                   gl_list_t *derivs)
+{
+  parse_state *temp = empty_parse_state ();
+  size_t si_size = ps->state_items.total_size;
+  size_t deriv_size = ps->derivs.total_size;
+  parser_pop (ps, si_size, deriv_size, temp);
+  *state_items = temp->state_items.contents;
+  *derivs = temp->derivs.contents;
+  // prevent the return lists from being freed
+  temp->state_items.contents = NULL;
+  temp->derivs.contents = NULL;
+  free_parse_state (temp);
+}
 
 /**
  * Compute the parse states that result from taking a transition on
