@@ -440,8 +440,7 @@ print_state_item (state_item *si, FILE *out)
       int i = 0;
       BITSET_FOR_EACH (biter, si->lookahead, sin, 0)
         {
-          symbol_print (symbols[sin], out);
-          fputs (", ", out);
+          fprintf (out, "%s, ", symbols[sin]->tag);
           ++i;
           if (i >= 3)
             {

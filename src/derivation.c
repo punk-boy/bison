@@ -66,24 +66,20 @@ derivation_size (derivation *deriv)
 void
 derivation_print (derivation *deriv, FILE *f)
 {
-  symbol *sym = symbols[deriv->sym];
   if (deriv == &d_dot)
     {
       fputs (" • ", f);
       return;
     }
+  symbol *sym = symbols[deriv->sym];
   if (!deriv->children)
     {
-      fputc (' ', f);
-      symbol_print (sym, f);
-      fputc (' ', f);
+      fprintf (f, " %s ", sym->tag);
       return;
     }
   gl_list_iterator_t it = gl_list_iterator (deriv->children);
   derivation *child;
-  fputc (' ', f);
-  symbol_print (sym, f);
-  fputs (" ::= [", f);
+  fprintf (f, " %s ::=[", sym->tag);
   while (gl_list_iterator_next (&it, (const void **) &child, NULL))
     derivation_print (child, f);
   fputs ("] ", f);
@@ -100,9 +96,7 @@ derivation_print_leaves (derivation *deriv, FILE *f)
   if (!deriv->children)
     {
       symbol *sym = symbols[deriv->sym];
-      fputc (' ', f);
-      symbol_print (sym, f);
-      fputc (' ', f);
+      fprintf (f, " %s ", sym->tag);
       return;
     }
 
