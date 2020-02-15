@@ -55,13 +55,6 @@ hash_pair_comparator (const hash_pair *l, const hash_pair *r)
   return l->key == r->key;
 }
 
-static void
-hash_pair_free (hash_pair *hp)
-{
-  bitset_free (hp->l);
-  free (hp);
-}
-
 static bitset
 hash_pair_lookup (Hash_table *tab, int key)
 {
@@ -89,6 +82,7 @@ hash_pair_remove (Hash_table *tab, int key)
   hash_pair *hp = xmalloc (sizeof (hash_pair));
   hp->key = key;
   hash_delete (tab, hp);
+  free(hp);
 }
 
 /* return a state_item from a state's id and the offset of the item
@@ -247,11 +241,15 @@ si_prods_lookup (state_item_number si)
 static void
 init_prods ()
 {
+  /*
+    Since almost all of the elements of si_prods are alive until
+    the end of execution, they aren't explicitly freed.
+  */
   si_prods = hash_initialize (nstate_items,
                               NULL,
                               (Hash_hasher) hash_pair_hasher,
                               (Hash_comparator) hash_pair_comparator,
-                              (Hash_data_freer) hash_pair_free);
+                              NULL);
   for (int i = 0; i < nstates; ++i)
     {
       state *state = states[i];
@@ -374,7 +372,6 @@ static inline void
 disable_state_item (state_item_number sin)
 {
   si_trans[sin] = -2;
-  hash_pair *l = xmalloc (sizeof (hash_pair));
   hash_pair_remove (si_prods, sin);
 }
 
