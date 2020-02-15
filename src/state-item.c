@@ -457,73 +457,49 @@ print_state_item (state_item *si, FILE *out)
 void
 state_items_report (FILE *out)
 {
-  state_items_init (out);
   fprintf (out, "# state items: %zu\n", nstate_items);
-
-  size_t count = 0;
-  for (state_item_number si = 0; si < nstate_items; ++si)
-    if (si_trans[si] != -1)
-      ++count;
-
-  fprintf (out, "# transitions: %zu\n", count);
-
-  count = 0;
-  for (hash_pair *hp = (hash_pair *) hash_get_first (si_prods);
-       hp != NULL; hp = hash_get_next (si_prods, hp))
-    count += bitset_count (hp->l);
-  fprintf (out, "# productions: %zu\n", count);
-
-  count = 0;
-  for (state_item_number si = 0; si < nstate_items; ++si)
-    count += bitset_count (si_revs[si]);
-  fprintf (out, "# reverse edges: %zu\n", count);
-
-  // Graph printing
-  if (trace_flag & trace_cex)
+  for (state_number i = 0; i < nstates; ++i)
     {
-      for (state_number i = 0; i < nstates; ++i)
+      fprintf (out, "State %d:\n", i);
+      for (int j = state_item_map[i]; j < state_item_map[i + 1]; ++j)
         {
-          fprintf (out, "State %d:\n", i);
-          for (int j = state_item_map[i]; j < state_item_map[i + 1]; ++j)
+          item_print (state_items[j].item, NULL, out);
+          putc ('\n', out);
+          if (si_trans[j] >= 0)
             {
-              item_print (state_items[j].item, NULL, out);
-              putc ('\n', out);
-              if (si_trans[j] >= 0)
-                {
-                  fputs ("    -> ", out);
-                  print_state_item (state_items + si_trans[j], out);
-                }
+              fputs ("    -> ", out);
+              print_state_item (state_items + si_trans[j], out);
+            }
 
-              bitset sets[2] = { si_prods_lookup (j), si_revs[j] };
-              const char *txt[2] = { "    => ", "    <- " };
-              for (int seti = 0; seti < 2; ++seti)
+          bitset sets[2] = { si_prods_lookup (j), si_revs[j] };
+          const char *txt[2] = { "    => ", "    <- " };
+          for (int seti = 0; seti < 2; ++seti)
+            {
+              bitset b = sets[seti];
+              if (b)
                 {
-                  bitset b = sets[seti];
-                  if (b)
+                  bitset_iterator biter;
+                  state_item_number sin;
+                  BITSET_FOR_EACH (biter, b, sin, 0)
                     {
-                      bitset_iterator biter;
-                      state_item_number sin;
-                      BITSET_FOR_EACH (biter, b, sin, 0)
-                        {
-                          fputs (txt[seti], out);
-                          print_state_item (state_items + sin, out);
-                        }
+                      fputs (txt[seti], out);
+                      print_state_item (state_items + sin, out);
                     }
                 }
-              putc ('\n', out);
             }
+          putc ('\n', out);
         }
-      fprintf (out, "TOKEN FIRSTS\n");
-      for (symbol_number i = ntokens; i < nsyms; ++i)
-        {
-          fprintf (out, "  %s firsts\n", symbols[i]->tag);
-          bitset_iterator iter;
-          symbol_number j;
-          BITSET_FOR_EACH (iter, tfirsts[i - ntokens], j, 0)
-            fprintf (out, "    %s\n", symbols[j]->tag);
-        }
-      fprintf (out, "\n\n");
     }
+  fprintf (out, "TOKEN FIRSTS\n");
+  for (symbol_number i = ntokens; i < nsyms; ++i)
+    {
+      fprintf (out, "  %s firsts\n", symbols[i]->tag);
+      bitset_iterator iter;
+      symbol_number j;
+      BITSET_FOR_EACH (iter, tfirsts[i - ntokens], j, 0)
+        fprintf (out, "    %s\n", symbols[j]->tag);
+    }
+  fprintf (out, "\n\n");
 }
 
 
@@ -542,7 +518,7 @@ state_items_init (FILE *report)
       gen_lookaheads ();
       init_tfirsts ();
       prune_disabled_paths ();
-      if (report)
+      if (report &&  (trace_flag & trace_cex))
         {
           fprintf (report, "init: %f\n", difftime (time (NULL), start));
           state_items_report (report);

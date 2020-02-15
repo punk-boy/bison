@@ -137,7 +137,6 @@ eligible_state_items (state_item *target)
 gl_list_t
 shortest_path_from_start (state_item_number target, symbol_number next_sym)
 {
-  state_items_init (stdout);
   time_t start = time (NULL);
   bitset eligible = OPTIMIZE_SHORTEST_PATH
     ? eligible_state_items (&state_items[target]) : NULL;
