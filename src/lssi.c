@@ -216,8 +216,8 @@ shortest_path_from_start (state_item_number target, symbol_number next_sym)
                 continue;
               lssi *next = new_lssi (nextSI, n, lookahead,
                                      !lookahead_used);
-              lookahead_used = lookahead_used
-                               || append_lssi (next, visited, queue);
+              lookahead_used = append_lssi (next, visited, queue)
+                               || lookahead_used;
             }
           if (!lookahead_used)
             bitset_free (lookahead);
